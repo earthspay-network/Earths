@@ -15,7 +15,7 @@ val versionSource = Def.task {
   // In case of not updating the version nodes build from headless sources will fail to connect to newer versions
   val FallbackVersion = (0, 14, 6)
 
-  val versionFile      = (sourceManaged in Compile).value / "com" / "wavesplatform" / "Version.scala"
+  val versionFile      = (sourceManaged in Compile).value / "com" / "earthspay" / "Version.scala"
   val versionExtractor = """(\d+)\.(\d+)\.(\d+).*""".r
   val (major, minor, patch) = version.value match {
     case versionExtractor(ma, mi, pa) => (ma.toInt, mi.toInt, pa.toInt)
@@ -23,7 +23,7 @@ val versionSource = Def.task {
   }
   IO.write(
     versionFile,
-    s"""package com.wavesplatform
+    s"""package com.earthspay
        |
        |object Version {
        |  val VersionString = "${version.value}"
@@ -35,7 +35,7 @@ val versionSource = Def.task {
 }
 val network = SettingKey[Network]("network")
 network := { Network(sys.props.get("network")) }
-name := "waves"
+name := "earths"
 normalizedName := s"${name.value}${network.value.packageSuffix}"
 
 git.useGitDescribe := true
@@ -45,7 +45,7 @@ logBuffered := false
 inThisBuild(
   Seq(
     scalaVersion := "2.12.6",
-    organization := "com.wavesplatform",
+    organization := "com.earthspay",
     crossPaths := false,
     scalacOptions ++= Seq("-feature", "-deprecation", "-language:higherKinds", "-language:implicitConversions", "-Ywarn-unused:-implicits", "-Xlint")
   ))
@@ -86,7 +86,7 @@ val aopMerge: MergeStrategy = new MergeStrategy {
 inTask(assembly)(
   Seq(
     test := {},
-    assemblyJarName := s"waves-all-${version.value}.jar",
+    assemblyJarName := s"earths-all-${version.value}.jar",
     assemblyMergeStrategy := {
       case PathList("META-INF", "io.netty.versions.properties") => MergeStrategy.concat
       case PathList("META-INF", "aop.xml")                      => aopMerge
@@ -96,7 +96,7 @@ inTask(assembly)(
 
 inConfig(Compile)(
   Seq(
-    mainClass := Some("com.wavesplatform.Application"),
+    mainClass := Some("com.earthspay.Application"),
     publishArtifact in packageDoc := false,
     publishArtifact in packageSrc := false,
     sourceGenerators += versionSource
@@ -112,19 +112,19 @@ inConfig(Test)(
 
 inConfig(Linux)(
   Seq(
-    maintainer := "wavesplatform.com",
-    packageSummary := "Waves node",
-    packageDescription := "Waves node"
+    maintainer := "earths.ga",
+    packageSummary := "Earths node",
+    packageDescription := "Earths node"
   ))
 
-bashScriptExtraDefines += s"""addJava "-Dwaves.directory=/var/lib/${normalizedName.value}""""
+bashScriptExtraDefines += s"""addJava "-Dearths.directory=/var/lib/${normalizedName.value}""""
 
 val linuxScriptPattern = "bin/(.+)".r
 val batScriptPattern   = "bin/([^.]+)\\.bat".r
 
 inConfig(Universal)(
   Seq(
-    mappings += (baseDirectory.value / s"waves-${network.value}.conf" -> "doc/waves.conf.sample"),
+    mappings += (baseDirectory.value / s"earths-${network.value}.conf" -> "doc/earths.conf.sample"),
     mappings := {
       val scriptSuffix = network.value.packageSuffix
       mappings.value.map {

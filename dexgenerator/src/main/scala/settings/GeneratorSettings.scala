@@ -4,9 +4,9 @@ import java.net.InetSocketAddress
 
 import cats.Show
 import cats.implicits.showInterpolator
-import com.wavesplatform.account.PrivateKeyAccount
-import com.wavesplatform.dexgen._
-import com.wavesplatform.wallet.Wallet
+import com.earthspay.account.PrivateKeyAccount
+import com.earthspay.dexgen._
+import com.earthspay.wallet.Wallet
 
 case class GeneratorSettings(chainId: String,
                              richAccounts: Seq[String],

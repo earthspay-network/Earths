@@ -1,0 +1,66 @@
+package com.earthspay.settings
+
+import com.typesafe.config.Config
+import com.earthspay.matcher.MatcherSettings
+import com.earthspay.metrics.Metrics
+import net.ceedubs.ficus.Ficus._
+import net.ceedubs.ficus.readers.ArbitraryTypeReader._
+
+case class EarthsSettings(directory: String,
+                         dataDirectory: String,
+                         maxCacheSize: Int,
+                         networkSettings: NetworkSettings,
+                         walletSettings: WalletSettings,
+                         blockchainSettings: BlockchainSettings,
+                         checkpointsSettings: CheckpointsSettings,
+                         feesSettings: FeesSettings,
+                         matcherSettings: MatcherSettings,
+                         minerSettings: MinerSettings,
+                         restAPISettings: RestAPISettings,
+                         synchronizationSettings: SynchronizationSettings,
+                         utxSettings: UtxSettings,
+                         featuresSettings: FeaturesSettings,
+                         metrics: Metrics.Settings)
+
+object EarthsSettings {
+
+  import NetworkSettings.networkSettingsValueReader
+
+  val configPath: String = "earths"
+
+  def fromConfig(config: Config): EarthsSettings = {
+    val directory               = config.as[String](s"$configPath.directory")
+    val dataDirectory           = config.as[String](s"$configPath.data-directory")
+    val maxCacheSize            = config.as[Int](s"$configPath.max-cache-size")
+    val networkSettings         = config.as[NetworkSettings]("earths.network")
+    val walletSettings          = config.as[WalletSettings]("earths.wallet")
+    val blockchainSettings      = BlockchainSettings.fromConfig(config)
+    val checkpointsSettings     = CheckpointsSettings.fromConfig(config)
+    val feesSettings            = FeesSettings.fromConfig(config)
+    val matcherSettings         = MatcherSettings.fromConfig(config)
+    val minerSettings           = MinerSettings.fromConfig(config)
+    val restAPISettings         = RestAPISettings.fromConfig(config)
+    val synchronizationSettings = SynchronizationSettings.fromConfig(config)
+    val utxSettings             = config.as[UtxSettings]("earths.utx")
+    val featuresSettings        = config.as[FeaturesSettings]("earths.features")
+    val metrics                 = config.as[Metrics.Settings]("metrics")
+
+    EarthsSettings(
+      directory,
+      dataDirectory,
+      maxCacheSize,
+      networkSettings,
+      walletSettings,
+      blockchainSettings,
+      checkpointsSettings,
+      feesSettings,
+      matcherSettings,
+      minerSettings,
+      restAPISettings,
+      synchronizationSettings,
+      utxSettings,
+      featuresSettings,
+      metrics
+    )
+  }
+}
