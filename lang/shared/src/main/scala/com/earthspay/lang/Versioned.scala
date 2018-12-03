@@ -1,0 +1,6 @@
+package com.earthspay.lang
+
+trait Versioned {
+  type V <: ScriptVersion
+  val version: V
+}
