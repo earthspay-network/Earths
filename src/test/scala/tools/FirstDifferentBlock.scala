@@ -25,8 +25,8 @@ object FirstDifferentBlock extends App {
   val DEVNET3  = "http://52.210.14.4:7739"
   val DEVNET3D = "http://52.210.14.4:17749"
 
-  val MAINNET1 = "http://52.210.14.4"
-  val MAINNET2 = "http://52.210.14.5"
+  val MAINNET1 = "http://18.231.27.49"
+  val MAINNET2 = "http://52.210.14.4"
   val MAINNET3 = "http://52.210.14.6" // 626195
 
   def firstDifferent(min: Int, max: Int, areSame: Int => Boolean): Int = {
