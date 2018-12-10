@@ -35,8 +35,8 @@ class BlockchainSettingsSpecification extends FlatSpec with Matchers {
         |        double-features-periods-after-height = 21
         |      }
         |      genesis {
-        |        timestamp = 1543708800000
-        |        block-timestamp = 1543708800000
+        |        timestamp = 1544400000000
+        |        block-timestamp = 1544400000000
         |        signature = "BASE58BLKSGNATURE"
         |        initial-balance = 100000000000000
         |        initial-base-target = 153722867
@@ -66,8 +66,8 @@ class BlockchainSettingsSpecification extends FlatSpec with Matchers {
     settings.functionalitySettings.blockVersion3AfterHeight should be(18)
     settings.functionalitySettings.preActivatedFeatures should be(Map(19 -> 100, 20 -> 200))
     settings.functionalitySettings.doubleFeaturesPeriodsAfterHeight should be(21)
-    settings.genesisSettings.blockTimestamp should be(1543708800000L)
-    settings.genesisSettings.timestamp should be(1543708800000L)
+    settings.genesisSettings.blockTimestamp should be(1544400000000L)
+    settings.genesisSettings.timestamp should be(1544400000000L)
     settings.genesisSettings.signature should be(ByteStr.decodeBase58("BASE58BLKSGNATURE").toOption)
     settings.genesisSettings.initialBalance should be(100000000000000L)
     settings.genesisSettings.initialBaseTarget should be(153722867)
