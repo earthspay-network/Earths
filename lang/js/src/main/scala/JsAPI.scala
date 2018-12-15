@@ -1,15 +1,15 @@
 import cats.kernel.Monoid
-import com.wavesplatform.lang.Global
-import com.wavesplatform.lang.v1.FunctionHeader.{Native, User}
-import com.wavesplatform.lang.v1.{Serde, CTX}
-import com.wavesplatform.lang.v1.compiler.CompilerV1
-import com.wavesplatform.lang.v1.compiler.Terms._
-import com.wavesplatform.lang.v1.compiler.Types._
-import com.wavesplatform.lang.v1.evaluator.ctx.impl.waves.WavesContext
-import com.wavesplatform.lang.v1.evaluator.ctx.impl.{CryptoContext, PureContext}
-import com.wavesplatform.lang.v1.parser.{Expressions, Parser}
-import com.wavesplatform.lang.v1.traits.domain.{Ord, Recipient, Tx}
-import com.wavesplatform.lang.v1.traits.{DataType, Environment}
+import com.earthspay.lang.Global
+import com.earthspay.lang.v1.FunctionHeader.{Native, User}
+import com.earthspay.lang.v1.{Serde, CTX}
+import com.earthspay.lang.v1.compiler.CompilerV1
+import com.earthspay.lang.v1.compiler.Terms._
+import com.earthspay.lang.v1.compiler.Types._
+import com.earthspay.lang.v1.evaluator.ctx.impl.earths.EarthsContext
+import com.earthspay.lang.v1.evaluator.ctx.impl.{CryptoContext, PureContext}
+import com.earthspay.lang.v1.parser.{Expressions, Parser}
+import com.earthspay.lang.v1.traits.domain.{Ord, Recipient, Tx}
+import com.earthspay.lang.v1.traits.{DataType, Environment}
 import fastparse.core.Parsed.{Failure, Success}
 import shapeless.{:+:, CNil}
 
@@ -43,9 +43,9 @@ object JsAPI {
     r(ast)
   }
 
-  val version = com.wavesplatform.lang.ScriptVersion.Versions.V1
+  val version = com.earthspay.lang.ScriptVersion.Versions.V1
 
-  val wavesContext = WavesContext.build(
+  val earthsContext = EarthsContext.build(
     version,
     new Environment {
       override def height: Long                                                                                    = 0
@@ -71,7 +71,7 @@ object JsAPI {
   }
 
   @JSExportTopLevel("fullContext")
-  val fullContext: CTX = Monoid.combineAll(Seq(PureContext.build(version), cryptoContext, wavesContext))
+  val fullContext: CTX = Monoid.combineAll(Seq(PureContext.build(version), cryptoContext, earthsContext))
 
   @JSExportTopLevel("getTypes")
   def getTypes() = fullContext.types.map(v => js.Dynamic.literal("name" -> v.name, "type" -> typeRepr(v.typeRef))).toJSArray
