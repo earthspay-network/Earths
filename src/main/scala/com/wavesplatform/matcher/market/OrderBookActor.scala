@@ -16,7 +16,7 @@ import com.wavesplatform.state.diffs.TransactionDiffer.TransactionValidationErro
 import com.wavesplatform.transaction.ValidationError
 import com.wavesplatform.transaction.ValidationError.{AccountBalanceError, HasScriptType, NegativeAmount, OrderValidationError}
 import com.wavesplatform.transaction.assets.exchange._
-import com.wavesplatform.utils.{NTP, ScorexLogging, Time}
+import com.wavesplatform.utils.{ScorexLogging, Time}
 import com.wavesplatform.utx.UtxPool
 import io.netty.channel.group.ChannelGroup
 import kamon.Kamon
@@ -144,6 +144,12 @@ class OrderBookActor(parent: ActorRef,
 
   private def applyEvent(e: Event): Unit = {
     log.trace(s"Apply event $e")
+    log.info(e match {
+      case Events.OrderAdded(order) => s"OrderAdded(${order.order.idStr()}, amount=${order.amount})"
+      case exec @ Events.OrderExecuted(submitted, counter) =>
+        s"OrderExecuted(s=${submitted.order.idStr()}, c=${counter.order.idStr()}, amount=${exec.executedAmount})"
+      case Events.OrderCanceled(order, unmatchable) => s"OrderCanceled(${order.order.idStr()}, system=$unmatchable)"
+    })
     orderBook = OrderBook.updateState(orderBook, e)
     refreshMarketStatus()
     updateSnapshot(orderBook)
@@ -309,7 +315,7 @@ object OrderBookActor {
             allChannels: ChannelGroup,
             settings: MatcherSettings,
             createTransaction: OrderExecuted => Either[ValidationError, ExchangeTransaction],
-            time: Time = NTP): Props =
+            time: Time): Props =
     Props(new OrderBookActor(parent, assetPair, updateSnapshot, updateMarketStatus, utx, allChannels, settings, createTransaction, time))
 
   def name(assetPair: AssetPair): String = assetPair.toString

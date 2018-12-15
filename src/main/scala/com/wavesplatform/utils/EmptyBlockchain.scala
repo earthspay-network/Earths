@@ -6,9 +6,9 @@ import com.wavesplatform.state.reader.LeaseDetails
 import com.wavesplatform.state.{AccountDataInfo, AssetDescription, BalanceSnapshot, Blockchain, ByteStr, DataEntry, Diff, Portfolio, VolumeAndFee}
 import com.wavesplatform.transaction.Transaction.Type
 import com.wavesplatform.transaction.ValidationError.GenericError
-import com.wavesplatform.transaction.{AssetId, Transaction, ValidationError}
 import com.wavesplatform.transaction.lease.LeaseTransaction
 import com.wavesplatform.transaction.smart.script.Script
+import com.wavesplatform.transaction.{AssetId, Transaction, ValidationError}
 
 object EmptyBlockchain extends Blockchain {
   override def height: Int = 0
@@ -55,11 +55,7 @@ object EmptyBlockchain extends Blockchain {
   override def addressTransactions(address: Address, types: Set[Type], count: Int, fromId: Option[ByteStr]): Either[String, Seq[(Int, Transaction)]] =
     Right(Seq.empty)
 
-  override def containsTransaction(id: ByteStr): Boolean = false
-
-  override def forgetTransactions(pred: (ByteStr, Long) => Boolean): Map[ByteStr, Long] = Map.empty
-
-  override def learnTransactions(values: Map[ByteStr, Long]): Unit = ()
+  override def containsTransaction(tx: Transaction): Boolean = false
 
   override def assetDescription(id: ByteStr): Option[AssetDescription] = None
 
@@ -92,12 +88,15 @@ object EmptyBlockchain extends Blockchain {
 
   override def allActiveLeases: Set[LeaseTransaction] = Set.empty
 
-  override def assetDistributionAtHeight(assetId: AssetId, height: Int): Either[ValidationError, Map[Address, Long]] = Right(Map.empty)
+  override def assetDistributionAtHeight(assetId: AssetId,
+                                         height: Int,
+                                         count: Int,
+                                         fromAddress: Option[Address]): Either[ValidationError, Map[Address, Long]] = Right(Map.empty)
 
   /** Builds a new portfolio map by applying a partial function to all portfolios on which the function is defined.
     *
     * @note Portfolios passed to `pf` only contain Waves and Leasing balances to improve performance */
   override def collectLposPortfolios[A](pf: PartialFunction[(Address, Portfolio), A]): Map[Address, A] = Map.empty
   override def append(diff: Diff, carryFee: Long, block: Block): Unit                                  = ()
-  override def rollbackTo(targetBlockId: ByteStr): Seq[Block]                                          = Seq.empty
+  override def rollbackTo(targetBlockId: ByteStr): Either[String, Seq[Block]]                          = Right(Seq.empty)
 }

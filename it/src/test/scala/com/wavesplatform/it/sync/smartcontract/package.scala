@@ -3,11 +3,11 @@ package com.wavesplatform.it.sync
 import com.wavesplatform.account.PrivateKeyAccount
 import com.wavesplatform.transaction.DataTransaction
 import com.wavesplatform.transaction.assets.exchange.{AssetPair, ExchangeTransactionV2, Order}
-import com.wavesplatform.utils.NTP
+import com.wavesplatform.utils.Time
 import play.api.libs.json.JsObject
 
 package object smartcontract {
-  def cryptoContextScript: String =
+  def cryptoContextScript(accountScript: Boolean): String =
     s"""
        |match tx {
        |  case ext : ExchangeTransaction =>
@@ -17,24 +17,21 @@ package object smartcontract {
        |    let str58 = fromBase58String(toBase58String(tx.id)) == tx.id
        |    let str64 = fromBase64String(toBase64String(tx.id)) == tx.id
        |    bks && sig && str58 && str64
-       |  case s : SetScriptTransaction => true
+       |  ${if (accountScript) "case s : SetScriptTransaction => true" else ""}
        |  case _ => false
        |}
      """.stripMargin
 
-  def pureContextScript(dtx: DataTransaction): String =
+  def pureContextScript(dtx: DataTransaction, accountScript: Boolean): String =
     s"""
-       | match tx {
-       |  case ext : ExchangeTransaction =>
-       |    # Pure context
+       |# Pure context
+       |    let ext = tx
        |    let longAll = 1000 * 2 == 2000 && 1000 / 2 == 500 && 1000 % 2 == 0 && 1000 + 2 == 1002 && 1000 - 2 == 998
        |    let sumString = "ha" + "-" +"ha" == "ha-ha"
        |    let body = ext.bodyBytes
        |    let sumByteVector = body + ext.bodyBytes == body + body
-       |
        |    let eqUnion = ext.sender != Address(base58'')
        |    let basic = longAll && sumString && sumByteVector && eqUnion
-       |
        |    let nePrim = 1000 != 999 && "ha" +"ha" != "ha-ha" && ext.bodyBytes != base64'hahaha'
        |    let dtx = extract(transactionById(base58'${dtx.id().base58}'))
        |    let neDataEntryAndGetElement = match dtx {
@@ -42,32 +39,29 @@ package object smartcontract {
        |       case _ => false
        |    }
        |    let neOptionAndExtractHeight = extract(transactionHeightById(base58'${dtx.id().base58}')) > 0
-       |
        |    let ne = nePrim && neDataEntryAndGetElement && neOptionAndExtractHeight
        |    let gteLong = 1000 > 999 && 1000 >= 999
-       |
        |    let getListSize = match dtx {
        |      case dddtx : DataTransaction => size(dddtx.data) != 0
        |      case _ => false
        |    }
-       |
        |    let unary = -1 == -1 && false == !true
-       |
        |    let frAction = fraction(12, 3, 4) == 9
        |    let bytesOps = size(ext.bodyBytes) != 0 && take(ext.bodyBytes, 1) != base58'ha' && drop(ext.bodyBytes, 1) != base58'ha' &&
        |    takeRight(ext.bodyBytes, 1) != base58'ha' && dropRight(ext.bodyBytes, 1) != base58'ha'
        |    let strOps = size("haha") != 0 && take("haha", 1) != "" && drop("haha", 0) != "" && takeRight("haha", 1) != "" &&
        |    dropRight("haha", 0) != ""
-       |
        |    let pure = basic && ne && gteLong && getListSize && unary && frAction #&& bytesOps && strOps
        |
+       | match tx {
+       |  case ex : ExchangeTransaction =>
        |    pure && height > 0
-       |  case s : SetScriptTransaction => true
+       |  ${if (accountScript) "case s : SetScriptTransaction | Order => pure && height > 0 " else ""}
        |  case _ => false
        | }
      """.stripMargin
 
-  def wavesContextScript(dtx: DataTransaction): String =
+  def wavesContextScript(dtx: DataTransaction, accountScript: Boolean): String =
     s"""
        | match tx {
        |  case ext : ExchangeTransaction =>
@@ -107,17 +101,17 @@ package object smartcontract {
        |     let balances = assetBalance(ext.sender, unit) > 0 && wavesBalance(ext.sender) != 0
        |
        |     entries && balances && aFromPK && aFromStr && height > 0
-       |  case s : SetScriptTransaction => true
+       |  ${if (accountScript) "case s : SetScriptTransaction => true" else ""}
        |  case _ => false
        | }
      """.stripMargin
 
-  def exchangeTx(pair: AssetPair, exTxFee: Long, orderFee: Long, accounts: PrivateKeyAccount*): JsObject = {
+  def exchangeTx(pair: AssetPair, exTxFee: Long, orderFee: Long, time: Time, accounts: PrivateKeyAccount*): JsObject = {
     val buyer       = accounts.head // first one
     val seller      = accounts.tail.head // second one
     val matcher     = accounts.last
     val sellPrice   = (0.50 * Order.PriceConstant).toLong
-    val (buy, sell) = orders(pair, 2, orderFee, buyer, seller, matcher)
+    val (buy, sell) = orders(pair, 2, orderFee, time, buyer, seller, matcher)
 
     val amount = math.min(buy.amount, sell.amount)
 
@@ -135,7 +129,7 @@ package object smartcontract {
         buyMatcherFee = buyMatcherFee,
         sellMatcherFee = sellMatcherFee,
         fee = matcherFee,
-        timestamp = NTP.correctedTime()
+        timestamp = time.correctedTime()
       )
       .right
       .get
@@ -144,19 +138,19 @@ package object smartcontract {
     tx
   }
 
-  def orders(pair: AssetPair, version: Byte, fee: Long, accounts: PrivateKeyAccount*): (Order, Order) = {
+  def orders(pair: AssetPair, version: Byte, fee: Long, time: Time, accounts: PrivateKeyAccount*): (Order, Order) = {
     val buyer               = accounts.head // first one
     val seller              = accounts.tail.head // second one
     val matcher             = accounts.last
-    val time                = NTP.correctedTime()
-    val expirationTimestamp = time + Order.MaxLiveTime
+    val ts                  = time.correctedTime()
+    val expirationTimestamp = ts + Order.MaxLiveTime
     val buyPrice            = 1 * Order.PriceConstant
     val sellPrice           = (0.50 * Order.PriceConstant).toLong
     val buyAmount           = 2
     val sellAmount          = 3
 
-    val buy  = Order.buy(buyer, matcher, pair, buyAmount, buyPrice, time, expirationTimestamp, fee, version)
-    val sell = Order.sell(seller, matcher, pair, sellAmount, sellPrice, time, expirationTimestamp, fee, version)
+    val buy  = Order.buy(buyer, matcher, pair, buyAmount, buyPrice, ts, expirationTimestamp, fee, version)
+    val sell = Order.sell(seller, matcher, pair, sellAmount, sellPrice, ts, expirationTimestamp, fee, version)
 
     (buy, sell)
   }
