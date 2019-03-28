@@ -2,12 +2,14 @@ package com.wavesplatform.generator
 
 import cats.Show
 import com.wavesplatform.account.PrivateKeyAccount
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.generator.OracleTransactionGenerator.Settings
 import com.wavesplatform.generator.utils.Gen
 import com.wavesplatform.it.util._
 import com.wavesplatform.state._
+import com.wavesplatform.transaction.Asset.Waves
 import com.wavesplatform.transaction.smart.SetScriptTransaction
-import com.wavesplatform.transaction.transfer.{TransferTransactionV2}
+import com.wavesplatform.transaction.transfer.TransferTransactionV2
 import com.wavesplatform.transaction.{DataTransaction, Transaction}
 
 class OracleTransactionGenerator(settings: Settings, val accounts: Seq[PrivateKeyAccount]) extends TransactionGenerator {
@@ -24,20 +26,19 @@ class OracleTransactionGenerator(settings: Settings, val accounts: Seq[PrivateKe
 
     val setScript: Transaction =
       SetScriptTransaction
-        .selfSigned(1, scriptedAccount, Some(script), enoughFee, System.currentTimeMillis())
+        .selfSigned(scriptedAccount, Some(script), enoughFee, System.currentTimeMillis())
         .explicitGet()
 
     val setDataTx: Transaction = DataTransaction
-      .selfSigned(1, oracle, settings.requiredData.toList, enoughFee, System.currentTimeMillis())
+      .selfSigned(oracle, settings.requiredData.toList, enoughFee, System.currentTimeMillis())
       .explicitGet()
 
-    val transactions: List[Transaction] =
-      List
-        .fill(settings.transactions) {
-          TransferTransactionV2
-            .selfSigned(2, None, scriptedAccount, oracle, 1.waves, System.currentTimeMillis(), None, enoughFee, Array.emptyByteArray)
-            .explicitGet()
-        }
+    val now = System.currentTimeMillis()
+    val transactions: List[Transaction] = (1 to settings.transactions).map { i =>
+      TransferTransactionV2
+        .selfSigned(Waves, scriptedAccount, oracle, 1.waves, now + i, Waves, enoughFee, Array.emptyByteArray)
+        .explicitGet()
+    }.toList
 
     setScript +: setDataTx +: transactions
   }

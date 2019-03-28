@@ -1,28 +1,29 @@
 package com.wavesplatform.state.diffs.smart.scenarios
 
-import com.wavesplatform.lang.v1.compiler.CompilerV1
+import com.wavesplatform.common.utils.EitherExt2
+import com.wavesplatform.lagonaki.mocks.TestBlock
+import com.wavesplatform.lang.ContentType
+import com.wavesplatform.lang.StdLibVersion.V1
+import com.wavesplatform.lang.v1.compiler.ExpressionCompiler
 import com.wavesplatform.lang.v1.parser.Parser
 import com.wavesplatform.state.diffs.smart._
-import com.wavesplatform.state._
 import com.wavesplatform.state.diffs.{assertDiffAndState, assertDiffEi, produce}
-import com.wavesplatform.utils.compilerContext
-import com.wavesplatform.{NoShrink, TransactionGen}
-import org.scalacheck.Gen
-import org.scalatest.prop.PropertyChecks
-import org.scalatest.{Matchers, PropSpec}
-import com.wavesplatform.lagonaki.mocks.TestBlock
-import com.wavesplatform.lang.ScriptVersion.Versions.V1
 import com.wavesplatform.transaction.GenesisTransaction
 import com.wavesplatform.transaction.lease.LeaseTransaction
 import com.wavesplatform.transaction.smart.SetScriptTransaction
 import com.wavesplatform.transaction.transfer._
+import com.wavesplatform.utils.compilerContext
+import com.wavesplatform.{NoShrink, TransactionGen}
+import org.scalacheck.Gen
+import org.scalatest.{Matchers, PropSpec}
+import org.scalatestplus.scalacheck.{ScalaCheckPropertyChecks => PropertyChecks}
 
 class TransactionFieldAccessTest extends PropSpec with PropertyChecks with Matchers with TransactionGen with NoShrink {
 
   private def preconditionsTransferAndLease(
       code: String): Gen[(GenesisTransaction, SetScriptTransaction, LeaseTransaction, TransferTransactionV2)] = {
-    val untyped = Parser(code).get.value
-    val typed   = CompilerV1(compilerContext(V1, isAssetScript = false), untyped).explicitGet()._1
+    val untyped = Parser.parseExpr(code).get.value
+    val typed   = ExpressionCompiler(compilerContext(V1, ContentType.Expression, isAssetScript = false), untyped).explicitGet()._1
     preconditionsTransferAndLease(typed)
   }
 

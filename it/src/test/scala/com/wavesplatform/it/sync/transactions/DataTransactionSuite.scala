@@ -1,37 +1,39 @@
 package com.wavesplatform.it.sync.transactions
 
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.{Base58, EitherExt2}
 import com.wavesplatform.it.api.SyncHttpApi._
 import com.wavesplatform.it.api.UnexpectedStatusCodeException
 import com.wavesplatform.it.sync.{calcDataFee, minFee}
 import com.wavesplatform.it.transactions.BaseTransactionSuite
 import com.wavesplatform.it.util._
-import com.wavesplatform.state.{BinaryDataEntry, BooleanDataEntry, ByteStr, DataEntry, EitherExt2, IntegerDataEntry, StringDataEntry}
+import com.wavesplatform.state.{BinaryDataEntry, BooleanDataEntry, DataEntry, IntegerDataEntry, StringDataEntry}
 import com.wavesplatform.transaction.DataTransaction
-import com.wavesplatform.utils.Base58
 import org.scalatest.{Assertion, Assertions}
 import play.api.libs.json._
+
 import scala.concurrent.duration._
 import scala.util.{Failure, Random, Try}
 
 class DataTransactionSuite extends BaseTransactionSuite {
 
   test("sender's waves balance is decreased by fee.") {
-    val (balance1, eff1) = notMiner.accountBalances(firstAddress)
+    val (balance1, eff1) = miner.accountBalances(firstAddress)
     val entry            = IntegerDataEntry("int", 0xcafebabe)
     val data             = List(entry)
     val transferFee      = calcDataFee(data)
     val txId             = sender.putData(firstAddress, data, transferFee).id
     nodes.waitForHeightAriseAndTxPresent(txId)
-    notMiner.assertBalances(firstAddress, balance1 - transferFee, eff1 - transferFee)
+    miner.assertBalances(firstAddress, balance1 - transferFee, eff1 - transferFee)
   }
 
   test("cannot transact without having enough waves") {
-    val (balance1, eff1) = notMiner.accountBalances(firstAddress)
+    val (balance1, eff1) = miner.accountBalances(firstAddress)
 
     val data = List(BooleanDataEntry("bool", false))
     assertBadRequestAndResponse(sender.putData(firstAddress, data, balance1 + 1), "negative waves balance")
     nodes.waitForHeightArise()
-    notMiner.assertBalances(firstAddress, balance1, eff1)
+    miner.assertBalances(firstAddress, balance1, eff1)
 
     val leaseAmount = 1.waves
     val leaseId     = sender.lease(firstAddress, secondAddress, leaseAmount, minFee).id
@@ -39,7 +41,7 @@ class DataTransactionSuite extends BaseTransactionSuite {
 
     assertBadRequestAndResponse(sender.putData(firstAddress, data, balance1 - leaseAmount), "negative effective balance")
     nodes.waitForHeightArise()
-    notMiner.assertBalances(firstAddress, balance1 - minFee, eff1 - leaseAmount - minFee)
+    miner.assertBalances(firstAddress, balance1 - minFee, eff1 - leaseAmount - minFee)
   }
 
   test("invalid transaction should not be in UTX or blockchain") {
@@ -47,11 +49,11 @@ class DataTransactionSuite extends BaseTransactionSuite {
              fee: Long = 100000,
              timestamp: Long = System.currentTimeMillis,
              version: Byte = DataTransaction.supportedVersions.head): DataTransaction =
-      DataTransaction.selfSigned(version, sender.privateKey, entries, fee, timestamp).explicitGet()
+      DataTransaction.selfSigned(sender.privateKey, entries, fee, timestamp).explicitGet()
 
-    val (balance1, eff1) = notMiner.accountBalances(firstAddress)
+    val (balance1, eff1) = miner.accountBalances(firstAddress)
     val invalidTxs = Seq(
-      (data(timestamp = System.currentTimeMillis + 1.day.toMillis), "Transaction .* is from far future"),
+      (data(timestamp = System.currentTimeMillis + 1.day.toMillis), "Transaction timestamp .* is more than .*ms in the future"),
       (data(fee = 99999), "Fee .* does not exceed minimal value")
     )
 
@@ -61,7 +63,7 @@ class DataTransactionSuite extends BaseTransactionSuite {
     }
 
     nodes.waitForHeightArise()
-    notMiner.assertBalances(firstAddress, balance1, eff1)
+    miner.assertBalances(firstAddress, balance1, eff1)
   }
 
   test("max transaction size") {
@@ -110,7 +112,7 @@ class DataTransactionSuite extends BaseTransactionSuite {
     sender.getData(secondAddress) shouldBe boolList ++ reIntList ++ stringList
 
     // define tx with all types
-    val (balance2, eff2) = notMiner.accountBalances(secondAddress)
+    val (balance2, eff2) = miner.accountBalances(secondAddress)
     val intEntry2        = IntegerDataEntry("int", -127)
     val boolEntry2       = BooleanDataEntry("bool", false)
     val blobEntry2       = BinaryDataEntry("blob", ByteStr(Array[Byte](127.toByte, 0, 1, 1)))
@@ -126,7 +128,7 @@ class DataTransactionSuite extends BaseTransactionSuite {
     sender.getData(secondAddress, "str") shouldBe stringEntry2
     sender.getData(secondAddress) shouldBe dataAllTypes.sortBy(_.key)
 
-    notMiner.assertBalances(secondAddress, balance2 - fee, eff2 - fee)
+    miner.assertBalances(secondAddress, balance2 - fee, eff2 - fee)
 
     val json = Json.parse(sender.get(s"/transactions/info/$txId").getResponseBody)
     ((json \ "data")(2) \ "value").as[String].startsWith("base64:") shouldBe true
@@ -134,7 +136,7 @@ class DataTransactionSuite extends BaseTransactionSuite {
 
   test("queries for nonexistent data") {
     def assertNotFound(url: String): Assertion = Try(sender.get(url)) match {
-      case Failure(UnexpectedStatusCodeException(_, statusCode, responseBody)) =>
+      case Failure(UnexpectedStatusCodeException(_, _, statusCode, responseBody)) =>
         statusCode shouldBe 404
         responseBody should include("no data for this key")
       case _ => Assertions.fail("Expected 404")
@@ -236,15 +238,15 @@ class DataTransactionSuite extends BaseTransactionSuite {
                                 "Duplicate keys found")
 
     val extraValueData = List(BinaryDataEntry("key", ByteStr(Array.fill(MaxValueSize + 1)(1.toByte))))
-    assertBadRequestAndResponse(sender.putData(firstAddress, extraValueData, calcDataFee(extraValueData)), TooBig)
+    assertBadRequestAndResponse(sender.putData(firstAddress, extraValueData, 1.waves), TooBig)
     nodes.waitForHeightArise()
 
     val largeBinData = List.tabulate(5)(n => BinaryDataEntry(extraKey, ByteStr(Array.fill(MaxValueSize)(n.toByte))))
-    assertBadRequestAndResponse(sender.putData(firstAddress, largeBinData, calcDataFee(largeBinData)), TooBig)
+    assertBadRequestAndResponse(sender.putData(firstAddress, largeBinData, 1.waves), TooBig)
     nodes.waitForHeightArise()
 
     val largeStrData = List.tabulate(5)(n => StringDataEntry(extraKey, "A" * MaxValueSize))
-    assertBadRequestAndResponse(sender.putData(firstAddress, largeStrData, calcDataFee(largeStrData)), TooBig)
+    assertBadRequestAndResponse(sender.putData(firstAddress, largeStrData, 1.waves), TooBig)
     nodes.waitForHeightArise()
 
     val tooManyEntriesData = List.tabulate(MaxEntryCount + 1)(n => IntegerDataEntry("key", 88))
@@ -259,7 +261,7 @@ class DataTransactionSuite extends BaseTransactionSuite {
   }
 
   test("try to make address with 1000 DataEntries") {
-    val dataSet = 0 to 200 flatMap (i =>
+    val dataSet = 0 until 200 flatMap (i =>
       List(
         IntegerDataEntry(s"int$i", 1000 + i),
         BooleanDataEntry(s"bool$i", false),
@@ -268,14 +270,8 @@ class DataTransactionSuite extends BaseTransactionSuite {
         IntegerDataEntry(s"integer$i", 1000 - i)
       ))
 
-    val dataAllTypes = dataSet.toList
-
-    for (i <- 0 to 900 by 100) {
-      val dataTx = dataAllTypes.slice(i, i + 100)
-      val fee    = calcDataFee(dataTx)
-      val txId   = sender.putData(thirdAddress, dataTx, fee).id
-      nodes.waitForHeightAriseAndTxPresent(txId)
-    }
+    val txIds = dataSet.grouped(100).map(_.toList).map(data => sender.putData(thirdAddress, data, calcDataFee(data)).id)
+    txIds foreach nodes.waitForTransaction
 
     val r = scala.util.Random.nextInt(199)
     sender.getData(thirdAddress, s"int$r") shouldBe IntegerDataEntry(s"int$r", 1000 + r)

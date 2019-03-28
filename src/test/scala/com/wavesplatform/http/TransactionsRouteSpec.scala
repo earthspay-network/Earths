@@ -4,15 +4,17 @@ import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.server.Route
 import com.wavesplatform.account.PublicKeyAccount
 import com.wavesplatform.api.http.{InvalidAddress, InvalidSignature, TooBigArrayAllocation, TransactionsApiRoute}
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.{Base58, EitherExt2}
 import com.wavesplatform.features.BlockchainFeatures
 import com.wavesplatform.http.ApiMarshallers._
-import com.wavesplatform.lang.ScriptVersion.Versions.V1
+import com.wavesplatform.lang.StdLibVersion.V1
 import com.wavesplatform.lang.v1.compiler.Terms.TRUE
 import com.wavesplatform.settings.{TestFunctionalitySettings, WalletSettings}
-import com.wavesplatform.state.{AssetDescription, Blockchain, ByteStr}
+import com.wavesplatform.state.{AssetDescription, Blockchain}
+import com.wavesplatform.transaction.Asset.IssuedAsset
 import com.wavesplatform.transaction.Transaction
-import com.wavesplatform.transaction.smart.script.v1.ScriptV1
-import com.wavesplatform.utils.Base58
+import com.wavesplatform.transaction.smart.script.v1.ExprScript
 import com.wavesplatform.utx.UtxPool
 import com.wavesplatform.wallet.Wallet
 import com.wavesplatform.{BlockGen, NoShrink, TestTime, TransactionGen}
@@ -20,8 +22,8 @@ import io.netty.channel.group.ChannelGroup
 import org.scalacheck.Gen
 import org.scalacheck.Gen._
 import org.scalamock.scalatest.MockFactory
-import org.scalatest.{Assertion, Matchers}
-import org.scalatest.prop.PropertyChecks
+import org.scalatest.Matchers
+import org.scalatestplus.scalacheck.{ScalaCheckPropertyChecks => PropertyChecks}
 import play.api.libs.json._
 
 class TransactionsRouteSpec
@@ -138,13 +140,13 @@ class TransactionsRouteSpec
       }
 
       "with sponsorship" in {
-        val assetId: ByteStr         = issueGen.sample.get.assetId()
+        val assetId: IssuedAsset     = IssuedAsset(issueGen.sample.get.assetId())
         val sender: PublicKeyAccount = accountGen.sample.get
         val transferTx = Json.obj(
           "type"            -> 4,
           "version"         -> 2,
           "amount"          -> 1000000,
-          "feeAssetId"      -> assetId.base58,
+          "feeAssetId"      -> assetId.id.base58,
           "senderPublicKey" -> Base58.encode(sender.publicKey),
           "recipient"       -> accountGen.sample.get.toAddress
         )
@@ -174,19 +176,19 @@ class TransactionsRouteSpec
 
         Post(routePath("/calculateFee"), transferTx) ~> route ~> check {
           status shouldEqual StatusCodes.OK
-          (responseAs[JsObject] \ "feeAssetId").as[String] shouldBe assetId.base58
+          (responseAs[JsObject] \ "feeAssetId").as[String] shouldBe assetId.id.base58
           (responseAs[JsObject] \ "feeAmount").as[Long] shouldEqual 5
         }
       }
 
       "with sponsorship, smart token and smart account" in {
-        val assetId: ByteStr         = issueGen.sample.get.assetId()
+        val assetId: IssuedAsset     = IssuedAsset(issueGen.sample.get.assetId())
         val sender: PublicKeyAccount = accountGen.sample.get
         val transferTx = Json.obj(
           "type"            -> 4,
           "version"         -> 2,
           "amount"          -> 1000000,
-          "feeAssetId"      -> assetId.base58,
+          "feeAssetId"      -> assetId.id.base58,
           "senderPublicKey" -> Base58.encode(sender.publicKey),
           "recipient"       -> accountGen.sample.get.toAddress
         )
@@ -208,7 +210,7 @@ class TransactionsRouteSpec
             decimals = 8,
             reissuable = false,
             totalVolume = Long.MaxValue,
-            script = Some(ScriptV1(V1, TRUE, checkSize = false).explicitGet()),
+            script = Some(ExprScript(V1, TRUE, checkSize = false).explicitGet()),
             sponsorship = 5
           )))
           .anyNumberOfTimes()
@@ -217,7 +219,7 @@ class TransactionsRouteSpec
 
         Post(routePath("/calculateFee"), transferTx) ~> route ~> check {
           status shouldEqual StatusCodes.OK
-          (responseAs[JsObject] \ "feeAssetId").as[String] shouldBe assetId.base58
+          (responseAs[JsObject] \ "feeAssetId").as[String] shouldBe assetId.id.base58
           (responseAs[JsObject] \ "feeAmount").as[Long] shouldEqual 45
         }
       }
@@ -231,36 +233,11 @@ class TransactionsRouteSpec
     "handles parameter errors with corresponding responses" - {
       "invalid address" in {
         forAll(bytes32StrGen) { badAddress =>
-          Get(routePath(s"/address/$badAddress")) ~> route should produce(InvalidAddress)
+          Get(routePath(s"/address/$badAddress/limit/1")) ~> route should produce(InvalidAddress)
         }
       }
 
       "invalid limit" - {
-        def assertInvalidLimit(p: String): Assertion = forAll(accountGen) { a =>
-          Get(routePath(p)) ~> route ~> check {
-            status shouldEqual StatusCodes.BadRequest
-            (responseAs[JsObject] \ "message").as[String] shouldEqual "invalid.limit"
-          }
-        }
-
-        "limit missing" in {
-          forAll(addressGen) { a =>
-            assertInvalidLimit(s"/address/$a")
-          }
-        }
-
-        "only trailing slash after address" in {
-          forAll(addressGen) { a =>
-            assertInvalidLimit(s"/address/$a/")
-          }
-        }
-
-        "limit could not be parsed as int" in {
-          forAll(addressGen) { a =>
-            assertInvalidLimit(s"/address/$a/qwe")
-          }
-        }
-
         "limit is too big" in {
           forAll(addressGen, choose(MaxTransactionsPerRequest + 1, Int.MaxValue).label("limitExceeded")) {
             case (address, limit) =>

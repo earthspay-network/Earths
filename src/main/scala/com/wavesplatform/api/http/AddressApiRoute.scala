@@ -2,25 +2,25 @@ package com.wavesplatform.api.http
 
 import java.nio.charset.StandardCharsets
 
-import javax.ws.rs.Path
 import akka.http.scaladsl.marshalling.ToResponseMarshallable
 import akka.http.scaladsl.server.Route
+import com.wavesplatform.account.{Address, PublicKeyAccount}
+import com.wavesplatform.common.utils.{Base58, Base64}
 import com.wavesplatform.consensus.GeneratingBalanceProvider
 import com.wavesplatform.crypto
+import com.wavesplatform.http.BroadcastRoute
 import com.wavesplatform.settings.{FunctionalitySettings, RestAPISettings}
 import com.wavesplatform.state.Blockchain
 import com.wavesplatform.state.diffs.CommonValidation
-import com.wavesplatform.utils.{Base58, Time}
+import com.wavesplatform.transaction.TransactionFactory
+import com.wavesplatform.transaction.smart.script.Script
+import com.wavesplatform.utils.Time
 import com.wavesplatform.utx.UtxPool
+import com.wavesplatform.wallet.Wallet
 import io.netty.channel.group.ChannelGroup
 import io.swagger.annotations._
+import javax.ws.rs.Path
 import play.api.libs.json._
-import com.wavesplatform.account.{Address, PublicKeyAccount}
-import com.wavesplatform.http.BroadcastRoute
-import com.wavesplatform.transaction.ValidationError.GenericError
-import com.wavesplatform.transaction.smart.script.ScriptCompiler
-import com.wavesplatform.transaction.{TransactionFactory, ValidationError}
-import com.wavesplatform.wallet.Wallet
 
 import scala.util.{Failure, Success, Try}
 
@@ -56,7 +56,7 @@ case class AddressApiRoute(settings: RestAPISettings,
     complete(
       Address
         .fromString(address)
-        .flatMap(addressScriptInfoJson)
+        .map(addressScriptInfoJson)
         .map(ToResponseMarshallable(_))
     )
   }
@@ -349,41 +349,40 @@ case class AddressApiRoute(settings: RestAPISettings,
             Balance(
               acc.address,
               0,
-              blockchain.portfolio(acc).balance
+              blockchain.balance(acc)
             )))
       .getOrElse(InvalidAddress)
   }
 
   private def balancesDetailsJson(account: Address): BalanceDetails = {
-    val portfolio = blockchain.portfolio(account)
+    val portfolio = blockchain.wavesPortfolio(account)
     BalanceDetails(
       account.address,
       portfolio.balance,
-      GeneratingBalanceProvider.balance(blockchain, functionalitySettings, blockchain.height, account),
+      GeneratingBalanceProvider.balance(blockchain, functionalitySettings, account),
       portfolio.balance - portfolio.lease.out,
       portfolio.effectiveBalance
     )
   }
 
-  private def addressScriptInfoJson(account: Address): Either[ValidationError, AddressScriptInfo] =
-    for {
-      script <- Right(blockchain.accountScript(account))
-      complexity <- script.fold[Either[ValidationError, Long]](Right(0))(script =>
-        ScriptCompiler.estimate(script, script.version).left.map(GenericError(_)))
-    } yield
-      AddressScriptInfo(
-        address = account.address,
-        script = script.map(_.bytes().base64),
-        scriptText = script.map(_.text),
-        complexity = complexity,
-        extraFee = if (script.isEmpty) 0 else CommonValidation.ScriptExtraFee
-      )
+  private def addressScriptInfoJson(account: Address): AddressScriptInfo = {
+    val script: Option[Script] = blockchain
+      .accountScript(account)
+
+    AddressScriptInfo(
+      address = account.address,
+      script = script.map(_.bytes().base64),
+      scriptText = script.map(_.expr.toString), // [WAIT] script.map(Script.decompile),
+      complexity = script.map(_.complexity).getOrElse(0),
+      extraFee = if (script.isEmpty) 0 else CommonValidation.ScriptExtraFee
+    )
+  }
 
   private def effectiveBalanceJson(address: String, confirmations: Int): ToResponseMarshallable = {
     Address
       .fromString(address)
       .right
-      .map(acc => ToResponseMarshallable(Balance(acc.address, confirmations, blockchain.effectiveBalance(acc, blockchain.height, confirmations))))
+      .map(acc => ToResponseMarshallable(Balance(acc.address, confirmations, blockchain.effectiveBalance(acc, confirmations))))
       .getOrElse(InvalidAddress)
   }
 
@@ -424,14 +423,16 @@ case class AddressApiRoute(settings: RestAPISettings,
         InvalidAddress
       } else {
         //DECODE SIGNATURE
-        val msg: Try[Array[Byte]] = if (decode) Base58.decode(m.message) else Success(m.message.getBytes)
+        val msg: Try[Array[Byte]] =
+          if (decode) if (m.message.startsWith("base64:")) Base64.tryDecode(m.message) else Base58.tryDecodeWithLimit(m.message, 2048)
+          else Success(m.message.getBytes)
         verifySigned(msg, m.signature, m.publickey, address)
       }
     }
   }
 
   private def verifySigned(msg: Try[Array[Byte]], signature: String, publicKey: String, address: String) = {
-    (msg, Base58.decode(signature), Base58.decode(publicKey)) match {
+    (msg, Base58.tryDecodeWithLimit(signature), Base58.tryDecodeWithLimit(publicKey)) match {
       case (Success(msgBytes), Success(signatureBytes), Success(pubKeyBytes)) =>
         val account = PublicKeyAccount(pubKeyBytes)
         val isValid = account.address == address && crypto.verify(signatureBytes, msgBytes, pubKeyBytes)
@@ -447,7 +448,7 @@ case class AddressApiRoute(settings: RestAPISettings,
     ))
   @ApiOperation(value = "Address from Public Key", notes = "Generate a address from public key", httpMethod = "GET")
   def publicKey: Route = (path("publicKey" / Segment) & get) { publicKey =>
-    Base58.decode(publicKey) match {
+    Base58.tryDecodeWithLimit(publicKey) match {
       case Success(pubKeyBytes) =>
         val account = Address.fromPublicKey(pubKeyBytes)
         complete(Json.obj("address" -> account.address))

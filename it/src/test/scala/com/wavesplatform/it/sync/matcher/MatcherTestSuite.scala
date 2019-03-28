@@ -1,6 +1,7 @@
 package com.wavesplatform.it.sync.matcher
 
 import com.typesafe.config.Config
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.it.api.SyncHttpApi._
 import com.wavesplatform.it.api.SyncMatcherHttpApi._
 import com.wavesplatform.it.api.{AssetDecimalsInfo, LevelResponse}
@@ -8,7 +9,7 @@ import com.wavesplatform.it.matcher.MatcherSuiteBase
 import com.wavesplatform.it.sync._
 import com.wavesplatform.it.sync.matcher.config.MatcherDefaultConfig._
 import com.wavesplatform.it.util._
-import com.wavesplatform.state.ByteStr
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
 import com.wavesplatform.transaction.assets.exchange.OrderType._
 import com.wavesplatform.transaction.assets.exchange.{AssetPair, _}
 import org.scalatest.prop.TableDrivenPropertyChecks
@@ -29,31 +30,34 @@ class MatcherTestSuite extends MatcherSuiteBase with TableDrivenPropertyChecks {
   "Check cross ordering between Alice and Bob" - {
     // Alice issues new asset
     val aliceAsset = aliceNode
-      .issue(aliceAcc.address, amountAssetName, "AliceCoin for matcher's tests", AssetQuantity, aliceCoinDecimals, reissuable = false, issueFee, 2)
+      .issue(aliceAcc.address,
+             amountAssetName,
+             "AliceCoin for matcher's tests",
+             AssetQuantity,
+             aliceCoinDecimals,
+             reissuable = false,
+             smartIssueFee,
+             2)
       .id
     val bobAsset = bobNode
-      .issue(bobAcc.address, "BobCoin1", "Bob's asset", someAssetAmount, 5, false, issueFee)
+      .issue(bobAcc.address, "BobCoin1", "Bob's asset", someAssetAmount, 5, false, smartIssueFee)
       .id
     val bobAsset2 = bobNode
-      .issue(bobAcc.address, "BobCoin2", "Bob's asset", someAssetAmount, 0, false, issueFee)
+      .issue(bobAcc.address, "BobCoin2", "Bob's asset", someAssetAmount, 0, false, smartIssueFee)
       .id
 
     Seq(aliceAsset, bobAsset, bobAsset2).foreach(matcherNode.waitForTransaction(_))
 
-    val aliceWavesPair = AssetPair(ByteStr.decodeBase58(aliceAsset).toOption, None)
+    val aliceWavesPair = AssetPair(IssuedAsset(ByteStr.decodeBase58(aliceAsset).get), Waves)
 
     val order1         = matcherNode.prepareOrder(aliceAcc, aliceWavesPair, SELL, aliceSellAmount, 2000.waves, version = orderVersion, timeToLive = 2.minutes)
     val order1Response = matcherNode.placeOrder(order1)
 
-    "can't place an order with the same timestamp" in {
-      val rawOrder2 = order1 match {
-        case x: OrderV1 => x.copy(amount = x.amount + 1)
-        case x: OrderV2 => x.copy(amount = x.amount + 1)
-      }
-
-      val order2 = Order.sign(rawOrder2, aliceAcc)
-      matcherNode.expectIncorrectOrderPlacement(order2, 400, "OrderRejected") shouldBe true
-    }
+    // Bob issues new asset
+    val bobWavesPair = AssetPair(
+      amountAsset = IssuedAsset(ByteStr.decodeBase58(bobAsset2).get),
+      priceAsset = Waves
+    )
 
     "assert addresses balances" in {
       aliceNode.assertAssetBalance(aliceAcc.address, aliceAsset, AssetQuantity)
@@ -241,17 +245,6 @@ class MatcherTestSuite extends MatcherSuiteBase with TableDrivenPropertyChecks {
         updatedAliceBalance should be(aliceBalance - matcherFee + 2000 * 100)
       }
 
-      "market status" in {
-        val resp = matcherNode.marketStatus(aliceWavesPair)
-
-        resp.lastPrice shouldBe Some(2000.waves)
-        resp.lastSide shouldBe Some("buy") // Same type as order5
-        resp.bid shouldBe Some(2000.waves)
-        resp.bidAmount shouldBe Some(30)
-        resp.ask shouldBe None
-        resp.askAmount shouldBe None
-      }
-
       "request order book for blacklisted pair" in {
         val f = matcherNode.matcherGetStatusCode(s"/matcher/orderbook/$ForbiddenAssetId/WAVES", 404)
         f.message shouldBe s"Invalid Asset ID: $ForbiddenAssetId"
@@ -262,7 +255,7 @@ class MatcherTestSuite extends MatcherSuiteBase with TableDrivenPropertyChecks {
         matcherNode.assertAssetBalance(aliceAcc.address, bobAsset, 0)
         matcherNode.assertAssetBalance(matcherAcc.address, bobAsset, 0)
         matcherNode.assertAssetBalance(bobAcc.address, bobAsset, someAssetAmount)
-        val bobWavesPair = AssetPair(ByteStr.decodeBase58(bobAsset).toOption, None)
+        val bobWavesPair = AssetPair(IssuedAsset(ByteStr.decodeBase58(bobAsset).get), Waves)
 
         def bobOrder = matcherNode.prepareOrder(bobAcc, bobWavesPair, SELL, someAssetAmount, 0.005.waves, matcherFee, orderVersion)
 
@@ -280,12 +273,6 @@ class MatcherTestSuite extends MatcherSuiteBase with TableDrivenPropertyChecks {
       }
 
       "trader can buy waves for assets with order without having waves" in {
-        // Bob issues new asset
-        val bobWavesPair = AssetPair(
-          amountAsset = ByteStr.decodeBase58(bobAsset2).toOption,
-          priceAsset = None
-        )
-
         val bobBalance = matcherNode.accountBalances(bobAcc.address)._1
         matcherNode.assertAssetBalance(aliceAcc.address, bobAsset2, 0)
         matcherNode.assertAssetBalance(matcherAcc.address, bobAsset2, 0)
@@ -315,6 +302,34 @@ class MatcherTestSuite extends MatcherSuiteBase with TableDrivenPropertyChecks {
         matcherNode.cancelOrder(bobAcc, bobWavesPair, order8.message.id).status should be("OrderCanceled")
         val transferBobId = aliceNode.transfer(aliceAcc.address, bobAcc.address, transferAmount, minFee, None, None, 2).id
         matcherNode.waitForTransaction(transferBobId)
+      }
+
+      "market status" in {
+        val ask       = 5.waves
+        val askAmount = 5000000
+
+        val bid       = 10.waves
+        val bidAmount = 10000000
+
+        matcherNode.placeOrder(bobAcc, bobWavesPair, SELL, askAmount, ask, matcherFee, orderVersion)
+
+        val resp1 = matcherNode.marketStatus(bobWavesPair)
+        resp1.lastPrice shouldBe None
+        resp1.lastSide shouldBe None
+        resp1.bid shouldBe None
+        resp1.bidAmount shouldBe None
+        resp1.ask shouldBe Some(ask)
+        resp1.askAmount shouldBe Some(askAmount)
+
+        matcherNode.placeOrder(aliceAcc, bobWavesPair, BUY, bidAmount, bid, matcherFee, orderVersion)
+
+        val resp2 = matcherNode.marketStatus(bobWavesPair)
+        resp2.lastPrice shouldBe Some(ask)
+        resp2.lastSide shouldBe Some(OrderType.BUY.toString)
+        resp2.bid shouldBe Some(bid)
+        resp2.bidAmount shouldBe Some(bidAmount - askAmount)
+        resp2.ask shouldBe None
+        resp2.askAmount shouldBe None
       }
     }
   }
@@ -363,6 +378,22 @@ class MatcherTestSuite extends MatcherSuiteBase with TableDrivenPropertyChecks {
         val o1                = matcherNode.placeOrder(aliceAcc, pair, BUY, amount, minNonZeroInvalid, matcherFee)
         o1.status shouldBe "OrderAccepted"
       }
+    }
+  }
+
+  "Debug information was updated" in {
+    val currentOffset = matcherNode.getCurrentOffset
+    currentOffset should be > 0L
+
+    val oldestSnapshotOffset = matcherNode.getOldestSnapshotOffset
+    oldestSnapshotOffset should be <= currentOffset
+
+    val snapshotOffsets = matcherNode.getAllSnapshotOffsets
+    snapshotOffsets.foreach {
+      case (assetPair, offset) =>
+        withClue(assetPair) {
+          offset should be <= currentOffset
+        }
     }
   }
 }

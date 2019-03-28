@@ -1,12 +1,18 @@
 package com.wavesplatform.lang.v1.traits
 
+import com.wavesplatform.lang.v1.traits.domain.Tx.ScriptTransfer
 import com.wavesplatform.lang.v1.traits.domain._
 import shapeless._
 
+object Environment {
+  type InputEntity = Tx :+: Ord :+: ScriptTransfer :+: CNil
+}
+
 trait Environment {
   def height: Long
-  def networkByte: Byte
-  def inputEntity: Tx :+: Ord :+: CNil
+  def chainId: Byte
+  def inputEntity: Environment.InputEntity
+  def tthis : Recipient.Address
   def transactionById(id: Array[Byte]): Option[Tx]
   def transactionHeightById(id: Array[Byte]): Option[Long]
   def data(addressOrAlias: Recipient, key: String, dataType: DataType): Option[Any]

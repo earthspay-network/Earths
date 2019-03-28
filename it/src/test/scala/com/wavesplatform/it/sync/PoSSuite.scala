@@ -1,21 +1,21 @@
 package com.wavesplatform.it.sync
 
 import com.typesafe.config.Config
+import com.wavesplatform.account.PrivateKeyAccount
+import com.wavesplatform.block.{Block, SignerData}
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.{Base58, EitherExt2}
 import com.wavesplatform.consensus.FairPoSCalculator
+import com.wavesplatform.consensus.nxt.NxtLikeConsensusBlockData
 import com.wavesplatform.crypto
+import com.wavesplatform.http.DebugMessage
 import com.wavesplatform.it.api.AsyncNetworkApi.NodeAsyncNetworkApi
 import com.wavesplatform.it.api.SyncHttpApi._
 import com.wavesplatform.it.transactions.NodesFromDocker
 import com.wavesplatform.it.{NodeConfigs, WaitForHeight2}
 import com.wavesplatform.network.RawBytes
-import com.wavesplatform.state._
-import com.wavesplatform.utils.Base58
 import org.scalatest.{CancelAfterFailure, FunSuite, Matchers}
 import play.api.libs.json.{JsSuccess, Json, Reads}
-import com.wavesplatform.account.PrivateKeyAccount
-import com.wavesplatform.block.{Block, SignerData}
-import com.wavesplatform.consensus.nxt.NxtLikeConsensusBlockData
-import com.wavesplatform.http.DebugMessage
 
 import scala.util.Random
 
@@ -143,7 +143,7 @@ class PoSSuite extends FunSuite with Matchers with NodesFromDocker with WaitForH
 
   def blockInfo(height: Int): (Array[Byte], Long, NxtLikeConsensusBlockData) = {
     val lastBlock      = Json.parse(nodes.head.get(s"/blocks/at/$height").getResponseBody)
-    val lastBlockId    = Base58.decode((lastBlock \ "signature").as[String]).get
+    val lastBlockId    = Base58.tryDecodeWithLimit((lastBlock \ "signature").as[String]).get
     val lastBlockTS    = (lastBlock \ "timestamp").as[Long]
     val lastBlockCData = (lastBlock \ "nxt-consensus").as[NxtLikeConsensusBlockData]
 
@@ -160,7 +160,7 @@ class PoSSuite extends FunSuite with Matchers with NodesFromDocker with WaitForH
 
   def blockSignature(h: Int): Array[Byte] = {
     Base58
-      .decode(
+      .tryDecodeWithLimit(
         (Json.parse(
           nodes.head
             .get(s"/blocks/at/$h")

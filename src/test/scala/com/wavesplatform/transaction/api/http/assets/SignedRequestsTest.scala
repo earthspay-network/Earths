@@ -1,12 +1,12 @@
 package com.wavesplatform.transaction.api.http.assets
 
-import com.wavesplatform.state.{ByteStr, EitherExt2}
-import com.wavesplatform.utils.Base58
+import com.wavesplatform.api.http.assets._
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.{Base58, EitherExt2}
+import com.wavesplatform.transaction.Proofs
+import com.wavesplatform.transaction.smart.script.Script
 import org.scalatest.{FunSuite, Matchers}
 import play.api.libs.json.Json
-import com.wavesplatform.api.http.assets._
-import com.wavesplatform.transaction.smart.script.Script
-import com.wavesplatform.transaction.Proofs
 
 class SignedRequestsTest extends FunSuite with Matchers {
 
@@ -65,7 +65,7 @@ class SignedRequestsTest extends FunSuite with Matchers {
     req.reissuable shouldBe true
 
     val tx = req.toTx.explicitGet()
-    tx.assetId.base58 shouldBe "Ha35nwsnmYxHRF8UmKG3S523BycBLZFU4FZnjXryKd4L"
+    tx.asset.id.base58 shouldBe "Ha35nwsnmYxHRF8UmKG3S523BycBLZFU4FZnjXryKd4L"
     tx.reissuable shouldBe true
     tx.fee shouldBe 100000L
     tx.quantity shouldBe 100000L
@@ -101,8 +101,8 @@ class SignedRequestsTest extends FunSuite with Matchers {
     val tx = req.toTx.explicitGet()
     Base58.encode(tx.sender.publicKey) shouldBe "D6HmGZqpXCyAqpz8mCAfWijYDWsPKncKe5v3jq1nTpf5"
     tx.timestamp shouldBe 1479462208828L
-    tx.attachment shouldBe Base58.decode("A").get
-    tx.assetId.get.base58 shouldBe "GAXAj8T4pSjunDqpz6Q3bit4fJJN9PD4t8AK8JZVSa5u"
+    tx.attachment shouldBe Base58.tryDecodeWithLimit("A").get
+    tx.assetId.maybeBase58Repr.get shouldBe "GAXAj8T4pSjunDqpz6Q3bit4fJJN9PD4t8AK8JZVSa5u"
     tx.amount shouldBe 100000
     tx.fee shouldBe 100000
     tx.signature.base58 shouldBe "4dPRTW6XyRQUTQwwpuZDCNy1UDHYG9WGsEQnn5v49Lj5uyh4XGDdwtEq3t6ZottweAXHieK32UokHwiTxGFtz9bQ"
@@ -137,9 +137,9 @@ class SignedRequestsTest extends FunSuite with Matchers {
     val tx = req.toTx.explicitGet()
     Base58.encode(tx.sender.publicKey) shouldBe "FJuErRxhV9JaFUwcYLabFK5ENvDRfyJbRz8FeVfYpBLn"
     tx.timestamp shouldBe 1489054107569L
-    tx.attachment shouldBe Base58.decode("2Kk7Zsr1e9jsqSBM5hpF").get
-    tx.assetId.get.base58 shouldBe "6MPKrD5B7GrfbciHECg1MwdvRUhRETApgNZspreBJ8JL"
-    tx.feeAssetId.get.base58 shouldBe "6MPKrD5B7GrfbciHECg1MwdvRUhRETApgNZspreBJ8JL"
+    tx.attachment shouldBe Base58.tryDecodeWithLimit("2Kk7Zsr1e9jsqSBM5hpF").get
+    tx.assetId.maybeBase58Repr.get shouldBe "6MPKrD5B7GrfbciHECg1MwdvRUhRETApgNZspreBJ8JL"
+    tx.feeAssetId.maybeBase58Repr.get shouldBe "6MPKrD5B7GrfbciHECg1MwdvRUhRETApgNZspreBJ8JL"
     tx.amount shouldBe 1000
     tx.fee shouldBe 100
     tx.signature.base58 shouldBe "UAhYXYdkFAFBuwAuUFP3yw7E8aRTyx56ZL4UPbT4ufomBzVLMRpdW2dCtJmfpCuPPMhGTvdzhXwb7o4ER6HAUpJ"
@@ -259,7 +259,7 @@ class SignedRequestsTest extends FunSuite with Matchers {
     req.timestamp shouldBe 1520945679531L
 
     val tx = req.toTx.explicitGet()
-    tx.assetId.base58 shouldBe "Ha35nwsnmYxHRF8UmKG3S523BycBLZFU4FZnjXryKd4L"
+    tx.asset.id.base58 shouldBe "Ha35nwsnmYxHRF8UmKG3S523BycBLZFU4FZnjXryKd4L"
     tx.script shouldBe Some(Script.fromBase64String("base64:AQkAAGcAAAACAHho/EXujJiPAJUhuPXZYac+rt2jYg==").explicitGet())
     tx.fee shouldBe 100000L
     tx.timestamp shouldBe 1520945679531L

@@ -3,14 +3,17 @@ package com.wavesplatform.state.reader
 import cats.implicits._
 import cats.kernel.Monoid
 import com.wavesplatform.account.{Address, Alias}
+import com.wavesplatform.block.Block.BlockId
 import com.wavesplatform.block.{Block, BlockHeader}
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.state._
+import com.wavesplatform.transaction.Asset.IssuedAsset
 import com.wavesplatform.transaction.Transaction.Type
 import com.wavesplatform.transaction.ValidationError.{AliasDoesNotExist, AliasIsDisabled}
 import com.wavesplatform.transaction.assets.IssueTransaction
 import com.wavesplatform.transaction.lease.LeaseTransaction
 import com.wavesplatform.transaction.smart.script.Script
-import com.wavesplatform.transaction.{AssetId, Transaction, ValidationError}
+import com.wavesplatform.transaction.{Asset, Transaction, ValidationError}
 
 class CompositeBlockchain(inner: Blockchain, maybeDiff: => Option[Diff], carry: Long = 0) extends Blockchain {
 
@@ -18,21 +21,26 @@ class CompositeBlockchain(inner: Blockchain, maybeDiff: => Option[Diff], carry: 
 
   override def portfolio(a: Address): Portfolio = inner.portfolio(a).combine(diff.portfolios.getOrElse(a, Portfolio.empty))
 
-  override def balance(address: Address, assetId: Option[AssetId]): Long =
+  override def balance(address: Address, assetId: Asset): Long =
     inner.balance(address, assetId) + diff.portfolios.getOrElse(address, Portfolio.empty).balanceOf(assetId)
 
-  override def assetScript(id: ByteStr): Option[Script] = maybeDiff.flatMap(_.assetScripts.get(id)).getOrElse(inner.assetScript(id))
-  override def hasAssetScript(id: ByteStr) = maybeDiff.flatMap(_.assetScripts.get(id)) match {
-    case Some(s) => s.nonEmpty
-    case None    => inner.hasAssetScript(id)
+  override def leaseBalance(address: Address): LeaseBalance = {
+    cats.Monoid.combine(inner.leaseBalance(address), diff.portfolios.getOrElse(address, Portfolio.empty).lease)
   }
 
-  override def assetDescription(id: ByteStr): Option[AssetDescription] = {
-    val script: Option[Script] = assetScript(id)
-    inner.assetDescription(id) match {
+  override def assetScript(asset: IssuedAsset): Option[Script] = maybeDiff.flatMap(_.assetScripts.get(asset)).getOrElse(inner.assetScript(asset))
+
+  override def hasAssetScript(asset: IssuedAsset): Boolean = maybeDiff.flatMap(_.assetScripts.get(asset)) match {
+    case Some(s) => s.nonEmpty
+    case None    => inner.hasAssetScript(asset)
+  }
+
+  override def assetDescription(asset: IssuedAsset): Option[AssetDescription] = {
+    val script: Option[Script] = assetScript(asset)
+    inner.assetDescription(asset) match {
       case Some(ad) =>
         diff.issuedAssets
-          .get(id)
+          .get(asset)
           .map { newAssetInfo =>
             val oldAssetInfo = AssetInfo(ad.reissuable, ad.totalVolume)
             val combination  = Monoid.combine(oldAssetInfo, newAssetInfo)
@@ -40,7 +48,7 @@ class CompositeBlockchain(inner: Blockchain, maybeDiff: => Option[Diff], carry: 
           }
           .orElse(Some(ad.copy(script = script)))
           .map { ad =>
-            diff.sponsorship.get(id).fold(ad) {
+            diff.sponsorship.get(asset).fold(ad) {
               case SponsorshipValue(sponsorship) =>
                 ad.copy(sponsorship = sponsorship)
               case SponsorshipNoInfo =>
@@ -48,17 +56,17 @@ class CompositeBlockchain(inner: Blockchain, maybeDiff: => Option[Diff], carry: 
             }
           }
       case None =>
-        val sponsorship = diff.sponsorship.get(id).fold(0L) {
+        val sponsorship = diff.sponsorship.get(asset).fold(0L) {
           case SponsorshipValue(sp) => sp
           case SponsorshipNoInfo    => 0L
         }
         diff.transactions
-          .get(id)
+          .get(asset.id)
           .collectFirst {
             case (_, it: IssueTransaction, _) =>
               AssetDescription(it.sender, it.name, it.description, it.decimals, it.reissuable, it.quantity, script, sponsorship)
           }
-          .map(z => diff.issuedAssets.get(id).fold(z)(r => z.copy(reissuable = r.isReissuable, totalVolume = r.volume, script = script)))
+          .map(z => diff.issuedAssets.get(asset).fold(z)(r => z.copy(reissuable = r.isReissuable, totalVolume = r.volume, script = script)))
     }
   }
 
@@ -108,7 +116,7 @@ class CompositeBlockchain(inner: Blockchain, maybeDiff: => Option[Diff], carry: 
   override def collectLposPortfolios[A](pf: PartialFunction[(Address, Portfolio), A]): Map[Address, A] = {
     val b = Map.newBuilder[Address, A]
     for ((a, p) <- diff.portfolios if p.lease != LeaseBalance.empty || p.balance != 0) {
-      pf.runWith(b += a -> _)(a -> portfolio(a).copy(assets = Map.empty))
+      pf.runWith(b += a -> _)(a -> this.wavesPortfolio(a))
     }
 
     inner.collectLposPortfolios(pf) ++ b.result()
@@ -119,8 +127,8 @@ class CompositeBlockchain(inner: Blockchain, maybeDiff: => Option[Diff], carry: 
   override def filledVolumeAndFee(orderId: ByteStr): VolumeAndFee =
     diff.orderFills.get(orderId).orEmpty.combine(inner.filledVolumeAndFee(orderId))
 
-  override def balanceSnapshots(address: Address, from: Int, to: Int): Seq[BalanceSnapshot] = {
-    if (to <= inner.height || maybeDiff.isEmpty) {
+  override def balanceSnapshots(address: Address, from: Int, to: BlockId): Seq[BalanceSnapshot] = {
+    if (inner.heightOf(to).isDefined || maybeDiff.isEmpty) {
       inner.balanceSnapshots(address, from, to)
     } else {
       val bs = BalanceSnapshot(height, portfolio(address))
@@ -161,33 +169,25 @@ class CompositeBlockchain(inner: Blockchain, maybeDiff: => Option[Diff], carry: 
       if pred(p)
     } yield address -> f(address)
 
-  override def assetDistribution(assetId: ByteStr): Map[Address, Long] = {
+  override def assetDistribution(assetId: IssuedAsset): AssetDistribution = {
     val fromInner = inner.assetDistribution(assetId)
-    val fromDiff  = changedBalances(_.assets.getOrElse(assetId, 0L) != 0, portfolio(_).assets.getOrElse(assetId, 0L))
+    val fromDiff  = AssetDistribution(changedBalances(_.assets.getOrElse(assetId, 0L) != 0, balance(_, assetId)))
 
-    fromInner ++ fromDiff
+    fromInner |+| fromDiff
   }
 
-  override def assetDistributionAtHeight(assetId: AssetId,
+  override def assetDistributionAtHeight(asset: IssuedAsset,
                                          height: Int,
                                          count: Int,
-                                         fromAddress: Option[Address]): Either[ValidationError, Map[Address, Long]] = {
-    val innerDistribution = inner.assetDistributionAtHeight(assetId, height, count, fromAddress)
-
-    if (height < this.height) {
-      innerDistribution
-    } else {
-      val distributionFromDiff =
-        changedBalances(_.assets.getOrElse(assetId, 0) != 0, portfolio(_).assets.getOrElse(assetId, 0))
-      innerDistribution.map(_ ++ distributionFromDiff)
-    }
+                                         fromAddress: Option[Address]): Either[ValidationError, AssetDistributionPage] = {
+    inner.assetDistributionAtHeight(asset, height, count, fromAddress)
   }
 
-  override def wavesDistribution(height: Int): Map[Address, Long] = {
+  override def wavesDistribution(height: Int): Either[ValidationError, Map[Address, Long]] = {
     val innerDistribution = inner.wavesDistribution(height)
     if (height < this.height) innerDistribution
     else {
-      innerDistribution ++ changedBalances(_.balance != 0, portfolio(_).balance)
+      innerDistribution.map(_ ++ changedBalances(_.balance != 0, balance(_)))
     }
   }
 

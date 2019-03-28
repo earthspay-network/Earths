@@ -2,10 +2,13 @@ package com.wavesplatform.state
 
 import cats.Monoid
 import com.wavesplatform.block.Block
+import com.wavesplatform.common.state.diffs.ProduceError
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.db.WithState
 import com.wavesplatform.lagonaki.mocks.TestBlock
 import com.wavesplatform.mining.MiningConstraint
 import com.wavesplatform.settings.{FunctionalitySettings, TestFunctionalitySettings => TFS}
+import com.wavesplatform.state.reader.CompositeBlockchain
 import com.wavesplatform.transaction.{Transaction, ValidationError}
 import org.scalatest.Matchers
 
@@ -26,7 +29,7 @@ package object diffs extends WithState with Matchers {
 
   private def assertDiffAndState(preconditions: Seq[Block], block: Block, fs: FunctionalitySettings, withNg: Boolean)(
       assertion: (Diff, Blockchain) => Unit): Unit = withStateAndHistory(fs) { state =>
-    def differ(blockchain: Blockchain, prevBlock: Option[Block], b: Block) =
+    def differ(blockchain: Blockchain, prevBlock: Option[Block], b: Block): Either[ValidationError, (Diff, Long, MiningConstraint)] =
       BlockDiffer.fromBlock(fs, blockchain, if (withNg) prevBlock else None, b, MiningConstraint.Unlimited)
 
     preconditions.foldLeft[Option[Block]](None) { (prevBlock, curBlock) =>
@@ -34,7 +37,11 @@ package object diffs extends WithState with Matchers {
       state.append(diff, fees, curBlock)
       Some(curBlock)
     }
+
     val (diff, fees, _) = differ(state, preconditions.lastOption, block).explicitGet()
+    val cb              = new CompositeBlockchain(state, Some(diff))
+    assertion(diff, cb)
+
     state.append(diff, fees, block)
     assertion(diff, state)
   }

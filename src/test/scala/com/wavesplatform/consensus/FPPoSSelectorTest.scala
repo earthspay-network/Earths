@@ -3,12 +3,16 @@ package com.wavesplatform.consensus
 import com.typesafe.config.ConfigFactory
 import com.wavesplatform.account.PrivateKeyAccount
 import com.wavesplatform.block.Block
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.state.diffs.ProduceError
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.consensus.nxt.NxtLikeConsensusBlockData
 import com.wavesplatform.database.LevelDBWriter
+import com.wavesplatform.db.DBCacheSettings
 import com.wavesplatform.lagonaki.mocks.TestBlock
 import com.wavesplatform.settings.{WavesSettings, _}
 import com.wavesplatform.state._
-import com.wavesplatform.state.diffs.{ENOUGH_AMT, ProduceError}
+import com.wavesplatform.state.diffs.ENOUGH_AMT
 import com.wavesplatform.transaction.{BlockchainUpdater, GenesisTransaction}
 import com.wavesplatform.utils.Time
 import com.wavesplatform.{TransactionGen, WithDB}
@@ -18,7 +22,7 @@ import org.scalatest.{FreeSpec, Matchers}
 import scala.concurrent.duration._
 import scala.util.Random
 
-class FPPoSSelectorTest extends FreeSpec with Matchers with WithDB with TransactionGen {
+class FPPoSSelectorTest extends FreeSpec with Matchers with WithDB with TransactionGen with DBCacheSettings {
 
   import FPPoSSelectorTest._
 
@@ -29,7 +33,7 @@ class FPPoSSelectorTest extends FreeSpec with Matchers with WithDB with Transact
           val miner1 = miners.head
           val miner2 = miners.tail.head
 
-          val miner1Balance = blockchain.effectiveBalance(miner1.toAddress, blockchain.height, 0)
+          val miner1Balance = blockchain.effectiveBalance(miner1.toAddress, 0)
 
           val fork1 = mkFork(10, miner1, blockchain)
           val fork2 = mkFork(10, miner2, blockchain)
@@ -65,7 +69,7 @@ class FPPoSSelectorTest extends FreeSpec with Matchers with WithDB with Transact
         case Env(pos, blockchain, miners) =>
           val miner        = miners.head
           val height       = blockchain.height
-          val minerBalance = blockchain.effectiveBalance(miner.toAddress, height, 0)
+          val minerBalance = blockchain.effectiveBalance(miner.toAddress, 0)
           val lastBlock    = blockchain.lastBlock.get
           val block        = forgeBlock(miner, blockchain, pos)()
 
@@ -80,7 +84,7 @@ class FPPoSSelectorTest extends FreeSpec with Matchers with WithDB with Transact
         case Env(pos, blockchain, miners) =>
           val miner        = miners.head
           val height       = blockchain.height
-          val minerBalance = blockchain.effectiveBalance(miner.toAddress, height, 0)
+          val minerBalance = blockchain.effectiveBalance(miner.toAddress, 0)
           val lastBlock    = blockchain.lastBlock.get
           val block        = forgeBlock(miner, blockchain, pos)(updateDelay = _ - 1)
 
@@ -199,11 +203,11 @@ class FPPoSSelectorTest extends FreeSpec with Matchers with WithDB with Transact
   }
 
   def withEnv(gen: Time => Gen[(Seq[PrivateKeyAccount], Seq[Block])])(f: Env => Unit): Unit = {
-    val defaultWriter = new LevelDBWriter(db, TestFunctionalitySettings.Stub, 100000, 2000, 120 * 60 * 1000)
+    val defaultWriter = new LevelDBWriter(db, ignoreSpendableBalanceChanged, TestFunctionalitySettings.Stub, maxCacheSize, 2000, 120 * 60 * 1000)
     val settings0     = WavesSettings.fromConfig(loadConfig(ConfigFactory.load()))
     val settings      = settings0.copy(featuresSettings = settings0.featuresSettings.copy(autoShutdownOnUnsupportedFeature = false))
-    val bcu           = new BlockchainUpdaterImpl(defaultWriter, settings, ntpTime)
-    val pos           = new PoSSelector(bcu, settings.blockchainSettings)
+    val bcu           = new BlockchainUpdaterImpl(defaultWriter, ignoreSpendableBalanceChanged, settings, ntpTime)
+    val pos           = new PoSSelector(bcu, settings.blockchainSettings, settings.synchronizationSettings)
     try {
       val (accounts, blocks) = gen(ntpTime).sample.get
 
@@ -285,7 +289,7 @@ object FPPoSSelectorTest {
     val height       = blockchain.height
     val lastBlock    = blockchain.lastBlock.get
     val ggParentTS   = blockchain.blockAt(height - 2).map(_.timestamp)
-    val minerBalance = blockchain.effectiveBalance(miner.toAddress, height, 0)
+    val minerBalance = blockchain.effectiveBalance(miner.toAddress, 0)
     val delay = updateDelay(
       pos
         .getValidBlockDelay(

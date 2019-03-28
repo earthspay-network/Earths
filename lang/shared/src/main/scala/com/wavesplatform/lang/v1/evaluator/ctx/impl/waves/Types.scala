@@ -1,33 +1,37 @@
 package com.wavesplatform.lang.v1.evaluator.ctx.impl.waves
 
+import com.wavesplatform.lang.StdLibVersion
+import com.wavesplatform.lang.StdLibVersion.StdLibVersion
 import com.wavesplatform.lang.v1.compiler.Types._
-import com.wavesplatform.lang.v1.evaluator.ctx.impl._
 import com.wavesplatform.lang.v1.evaluator.ctx.{CaseType, DefinedType, UnionType}
 
 object Types {
 
-  val addressType        = CaseType("Address", List("bytes" -> BYTEVECTOR))
+  val addressType        = CaseType("Address", List("bytes" -> BYTESTR))
   val aliasType          = CaseType("Alias", List("alias" -> STRING))
   val addressOrAliasType = UNION(addressType.typeRef, aliasType.typeRef)
 
-  val transfer = CaseType("Transfer", List("recipient" -> addressOrAliasType, "amount" -> LONG))
+  val transfer         = CaseType("Transfer", List("recipient" -> addressOrAliasType, "amount" -> LONG))
 
-  val optionByteVector     = UNION(BYTEVECTOR, UNIT)
   val optionAddress        = UNION(addressType.typeRef, UNIT)
-  val optionLong           = UNION(LONG, UNIT)
-  val listByteVector: LIST = LIST(BYTEVECTOR)
   val listTransfers        = LIST(transfer.typeRef)
+  val paymentType          = CaseType("AttachedPayment", List("assetId" -> optionByteVector, "amount" -> LONG))
+
+  val optionPayment = UNION(paymentType.typeRef, UNIT)
+
+  val invocationType =
+    CaseType("Invocation", List("caller" -> addressType.typeRef, "callerPublicKey" -> BYTESTR, "payment" -> optionPayment))
 
   private val header = List(
-    "id"        -> BYTEVECTOR,
+    "id"        -> BYTESTR,
     "fee"       -> LONG,
     "timestamp" -> LONG,
     "version"   -> LONG,
   )
   private val proven = List(
     "sender"          -> addressType.typeRef,
-    "senderPublicKey" -> BYTEVECTOR,
-    "bodyBytes"       -> BYTEVECTOR
+    "senderPublicKey" -> BYTESTR,
+    "bodyBytes"       -> BYTESTR
   )
 
   private val proofs = "proofs" -> listByteVector
@@ -46,7 +50,7 @@ object Types {
           "amount"     -> LONG,
           "assetId"    -> optionByteVector,
           "recipient"  -> addressOrAliasType,
-          "attachment" -> BYTEVECTOR
+          "attachment" -> BYTESTR
         ) ++ header ++ proven,
         proofsEnabled
       )
@@ -63,11 +67,23 @@ object Types {
     addProofsIfNeeded(
       List(
         "quantity"    -> LONG,
-        "name"        -> BYTEVECTOR,
-        "description" -> BYTEVECTOR,
+        "name"        -> BYTESTR,
+        "description" -> BYTESTR,
         "reissuable"  -> BOOLEAN,
         "decimals"    -> LONG,
         "script"      -> optionByteVector
+      ) ++ header ++ proven,
+      proofsEnabled
+    )
+  )
+
+  def buildInvokeScriptTransactionType(proofsEnabled: Boolean) = CaseType(
+    "InvokeScriptTransaction",
+    addProofsIfNeeded(
+      List(
+        "dappAddress" -> addressType.typeRef,
+        "payment"     -> optionPayment,
+        "feeAssetId" -> optionByteVector
       ) ++ header ++ proven,
       proofsEnabled
     )
@@ -78,7 +94,7 @@ object Types {
     addProofsIfNeeded(
       List(
         "quantity"   -> LONG,
-        "assetId"    -> BYTEVECTOR,
+        "assetId"    -> BYTESTR,
         "reissuable" -> BOOLEAN,
       ) ++ header ++ proven,
       proofsEnabled
@@ -90,7 +106,7 @@ object Types {
     addProofsIfNeeded(
       List(
         "quantity" -> LONG,
-        "assetId"  -> BYTEVECTOR
+        "assetId"  -> BYTESTR
       ) ++ header ++ proven,
       proofsEnabled
     )
@@ -101,7 +117,7 @@ object Types {
     addProofsIfNeeded(
       List(
         "script"  -> optionByteVector,
-        "assetId" -> BYTEVECTOR
+        "assetId" -> BYTESTR
       ) ++ header ++ proven,
       proofsEnabled
     )
@@ -122,7 +138,7 @@ object Types {
     "LeaseCancelTransaction",
     addProofsIfNeeded(
       List(
-        "leaseId" -> BYTEVECTOR,
+        "leaseId" -> BYTESTR,
       ) ++ header ++ proven,
       proofsEnabled
     )
@@ -155,7 +171,7 @@ object Types {
     "SponsorFeeTransaction",
     addProofsIfNeeded(
       List(
-        "assetId"              -> BYTEVECTOR,
+        "assetId"              -> BYTESTR,
         "minSponsoredAssetFee" -> optionLong
       ) ++ header ++ proven,
       proofsEnabled
@@ -174,15 +190,16 @@ object Types {
       "Order",
       addProofsIfNeeded(
         List(
-          "id"               -> BYTEVECTOR,
-          "matcherPublicKey" -> BYTEVECTOR,
-          "assetPair"        -> assetPairType.typeRef,
-          "orderType"        -> ordTypeType,
-          "price"            -> LONG,
-          "amount"           -> LONG,
-          "timestamp"        -> LONG,
-          "expiration"       -> LONG,
-          "matcherFee"       -> LONG
+          "id"                -> BYTESTR,
+          "matcherPublicKey"  -> BYTESTR,
+          "assetPair"         -> assetPairType.typeRef,
+          "orderType"         -> ordTypeType,
+          "price"             -> LONG,
+          "amount"            -> LONG,
+          "timestamp"         -> LONG,
+          "expiration"        -> LONG,
+          "matcherFee"        -> LONG,
+          "matcherFeeAssetId" -> optionByteVector
         ) ++ proven,
         proofsEnabled
       )
@@ -203,7 +220,7 @@ object Types {
     )
   )
 
-  private val dataEntryValueType = UNION(LONG, BOOLEAN, BYTEVECTOR, STRING)
+  private val dataEntryValueType = UNION(LONG, BOOLEAN, BYTESTR, STRING)
   val dataEntryType              = CaseType("DataEntry", List("key" -> STRING, "value" -> dataEntryValueType))
 
   def buildDataTransactionType(proofsEnabled: Boolean) = CaseType(
@@ -220,7 +237,7 @@ object Types {
         "totalAmount"   -> LONG,
         "transfers"     -> listTransfers,
         "transferCount" -> LONG,
-        "attachment"    -> BYTEVECTOR
+        "attachment"    -> BYTESTR
       ) ++ header ++ proven,
       proofsEnabled
     )
@@ -240,17 +257,17 @@ object Types {
     List(genesisTransactionType, buildPaymentTransactionType(proofsEnabled))
   }
 
-  def buildAssetSupportedTransactions(proofsEnabled: Boolean) = List(
+  def buildAssetSupportedTransactions(proofsEnabled: Boolean, v: StdLibVersion) = List(
     buildReissueTransactionType(proofsEnabled),
     buildBurnTransactionType(proofsEnabled),
     buildMassTransferTransactionType(proofsEnabled),
     buildExchangeTransactionType(proofsEnabled),
     buildTransferTransactionType(proofsEnabled),
-    buildSetAssetScriptTransactionType(proofsEnabled),
-  )
+    buildSetAssetScriptTransactionType(proofsEnabled)
+  ) ++ (if (v == StdLibVersion.V3) List(buildInvokeScriptTransactionType(proofsEnabled)) else List.empty)
 
-  def buildActiveTransactionTypes(proofsEnabled: Boolean): List[CaseType] = {
-    buildAssetSupportedTransactions(proofsEnabled) ++
+  def buildActiveTransactionTypes(proofsEnabled: Boolean, v: StdLibVersion): List[CaseType] = {
+    buildAssetSupportedTransactions(proofsEnabled, v) ++
       List(
         buildIssueTransactionType(proofsEnabled),
         buildLeaseTransactionType(proofsEnabled),
@@ -262,9 +279,9 @@ object Types {
       )
   }
 
-  def buildWavesTypes(proofsEnabled: Boolean): Seq[DefinedType] = {
+  def buildWavesTypes(proofsEnabled: Boolean, v: StdLibVersion): Seq[DefinedType] = {
 
-    val activeTxTypes                    = buildActiveTransactionTypes(proofsEnabled)
+    val activeTxTypes                    = buildActiveTransactionTypes(proofsEnabled, v)
     val obsoleteTxTypes                  = buildObsoleteTransactionTypes(proofsEnabled)
     val transactionsCommonType           = UnionType("Transaction", activeTxTypes.map(_.typeRef))
     val transactionTypes: List[CaseType] = obsoleteTxTypes ++ activeTxTypes

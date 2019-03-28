@@ -1,32 +1,33 @@
 package com.wavesplatform.transaction.smart
 
 import cats.kernel.Monoid
-import com.wavesplatform.lang.{Global, ScriptVersion}
+import com.wavesplatform.account.Address
+import com.wavesplatform.lang.{ContentType, ExecutionError, Global, ScriptType}
+import com.wavesplatform.lang.StdLibVersion._
+import com.wavesplatform.lang.utils.DirectiveSet
 import com.wavesplatform.lang.v1.evaluator.ctx.EvaluationContext
 import com.wavesplatform.lang.v1.evaluator.ctx.impl.waves.WavesContext
 import com.wavesplatform.lang.v1.evaluator.ctx.impl.{CryptoContext, PureContext}
 import com.wavesplatform.state._
-import com.wavesplatform.transaction._
-import com.wavesplatform.transaction.assets.exchange.Order
 import monix.eval.Coeval
-import shapeless._
 
 object BlockchainContext {
 
-  type In = Transaction :+: Order :+: CNil
-  def build(version: ScriptVersion,
+  type In = WavesEnvironment.In
+  def build(version: StdLibVersion,
             nByte: Byte,
             in: Coeval[In],
             h: Coeval[Int],
             blockchain: Blockchain,
-            isTokenContext: Boolean): EvaluationContext = {
-    Monoid
-      .combineAll(
-        Seq(
-          PureContext.build(version),
-          CryptoContext.build(Global),
-          WavesContext.build(version, new WavesEnvironment(nByte, in, h, blockchain), isTokenContext)
-        ))
-      .evaluationContext
-  }
+            isTokenContext: Boolean,
+            isContract: Boolean,
+            tthis: Coeval[Address]): Either[ExecutionError, EvaluationContext] =
+    DirectiveSet(
+      version,
+      ScriptType.isAssetScript(isTokenContext),
+      ContentType.isDApp(isContract)
+    ).map(WavesContext.build(_, new WavesEnvironment(nByte, in, h, blockchain, tthis)))
+      .map(Seq(PureContext.build(version), CryptoContext.build(Global), _))
+      .map(Monoid.combineAll(_))
+      .map(_.evaluationContext)
 }

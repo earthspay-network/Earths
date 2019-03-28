@@ -1,11 +1,14 @@
 package com.wavesplatform.state
 
 import com.wavesplatform.account.{Address, Alias}
+import com.wavesplatform.block.Block.BlockId
 import com.wavesplatform.block.{Block, BlockHeader}
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.state.reader.LeaseDetails
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
 import com.wavesplatform.transaction.lease.LeaseTransaction
 import com.wavesplatform.transaction.smart.script.Script
-import com.wavesplatform.transaction.{AssetId, Transaction, ValidationError}
+import com.wavesplatform.transaction.{Asset, Transaction, ValidationError}
 
 trait Blockchain {
   def height: Int
@@ -47,7 +50,7 @@ trait Blockchain {
 
   def containsTransaction(tx: Transaction): Boolean
 
-  def assetDescription(id: ByteStr): Option[AssetDescription]
+  def assetDescription(id: IssuedAsset): Option[AssetDescription]
 
   def resolveAlias(a: Alias): Either[ValidationError, Address]
 
@@ -56,27 +59,33 @@ trait Blockchain {
   def filledVolumeAndFee(orderId: ByteStr): VolumeAndFee
 
   /** Retrieves Waves balance snapshot in the [from, to] range (inclusive) */
-  def balanceSnapshots(address: Address, from: Int, to: Int): Seq[BalanceSnapshot]
+  def balanceSnapshots(address: Address, from: Int, to: BlockId): Seq[BalanceSnapshot]
 
   def accountScript(address: Address): Option[Script]
   def hasScript(address: Address): Boolean
 
-  def assetScript(id: ByteStr): Option[Script]
-  def hasAssetScript(id: ByteStr): Boolean
+  def assetScript(id: IssuedAsset): Option[Script]
+  def hasAssetScript(id: IssuedAsset): Boolean
 
   def accountData(acc: Address): AccountDataInfo
   def accountData(acc: Address, key: String): Option[DataEntry[_]]
 
-  def balance(address: Address, mayBeAssetId: Option[AssetId]): Long
+  def leaseBalance(address: Address): LeaseBalance
 
-  def assetDistribution(assetId: ByteStr): Map[Address, Long]
-  def assetDistributionAtHeight(assetId: AssetId, height: Int, count: Int, fromAddress: Option[Address]): Either[ValidationError, Map[Address, Long]]
-  def wavesDistribution(height: Int): Map[Address, Long]
+  def balance(address: Address, mayBeAssetId: Asset = Waves): Long
+
+  def assetDistribution(asset: IssuedAsset): AssetDistribution
+  def assetDistributionAtHeight(asset: IssuedAsset,
+                                height: Int,
+                                count: Int,
+                                fromAddress: Option[Address]): Either[ValidationError, AssetDistributionPage]
+  def wavesDistribution(height: Int): Either[ValidationError, Map[Address, Long]]
 
   // the following methods are used exclusively by patches
   def allActiveLeases: Set[LeaseTransaction]
 
   /** Builds a new portfolio map by applying a partial function to all portfolios on which the function is defined.
+    *
     * @note Portfolios passed to `pf` only contain Waves and Leasing balances to improve performance */
   def collectLposPortfolios[A](pf: PartialFunction[(Address, Portfolio), A]): Map[Address, A]
 

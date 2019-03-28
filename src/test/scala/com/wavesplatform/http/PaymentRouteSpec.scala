@@ -1,17 +1,18 @@
 package com.wavesplatform.http
 
+import com.wavesplatform.api.http.{ApiKeyNotValid, PaymentApiRoute}
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.http.ApiMarshallers._
-import com.wavesplatform.state.{Diff, EitherExt2}
+import com.wavesplatform.state.Diff
+import com.wavesplatform.transaction.{Asset, Transaction}
+import com.wavesplatform.transaction.transfer._
+import com.wavesplatform.utils.Time
 import com.wavesplatform.utx.UtxPool
 import com.wavesplatform.{NoShrink, TestWallet, TransactionGen}
-import io.netty.channel.group.ChannelGroup
+import io.netty.channel.group.{ChannelGroup, ChannelGroupFuture, ChannelMatcher}
 import org.scalamock.scalatest.MockFactory
-import org.scalatest.prop.PropertyChecks
+import org.scalatestplus.scalacheck.{ScalaCheckPropertyChecks => PropertyChecks}
 import play.api.libs.json.{JsObject, Json}
-import com.wavesplatform.api.http.{ApiKeyNotValid, PaymentApiRoute}
-import com.wavesplatform.utils.Time
-import com.wavesplatform.transaction.Transaction
-import com.wavesplatform.transaction.transfer._
 
 class PaymentRouteSpec
     extends RouteSpec("/payment")
@@ -22,9 +23,11 @@ class PaymentRouteSpec
     with TransactionGen
     with NoShrink {
 
-  private val utx = stub[UtxPool]
-  (utx.putIfNew _).when(*).onCall((t: Transaction) => Right((true, Diff.empty))).anyNumberOfTimes()
+  private val utx         = stub[UtxPool]
   private val allChannels = stub[ChannelGroup]
+
+  (utx.putIfNew _).when(*).onCall((t: Transaction) => Right((true, Diff.empty))).anyNumberOfTimes()
+  (allChannels.writeAndFlush(_: Any, _: ChannelMatcher)).when(*, *).onCall((_: Any, _: ChannelMatcher) => stub[ChannelGroupFuture]).anyNumberOfTimes()
 
   "accepts payments" in {
     forAll(accountOrAliasGen.label("recipient"), positiveLongGen.label("amount"), smallFeeGen.label("fee")) {
@@ -38,7 +41,7 @@ class PaymentRouteSpec
         }
 
         val sender = testWallet.privateKeyAccounts.head
-        val tx     = TransferTransactionV1.selfSigned(None, sender, recipient, amount, timestamp, None, fee, Array())
+        val tx     = TransferTransactionV1.selfSigned(Asset.Waves, sender, recipient, amount, timestamp, Asset.Waves, fee, Array())
 
         val route = PaymentApiRoute(restAPISettings, testWallet, utx, allChannels, time).route
 

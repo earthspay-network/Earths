@@ -3,10 +3,12 @@ package com.wavesplatform.transaction.assets.exchange
 import cats.data.State
 import com.google.common.primitives.Longs
 import com.wavesplatform.account.{PrivateKeyAccount, PublicKeyAccount}
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.crypto
 import com.wavesplatform.crypto._
 import com.wavesplatform.serialization.Deser
-import com.wavesplatform.state.ByteStr
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
 import com.wavesplatform.transaction._
 import monix.eval.Coeval
 
@@ -55,7 +57,7 @@ object OrderV2 {
           matcherFee: Long): Order = {
     val unsigned = OrderV2(sender, matcher, pair, OrderType.BUY, amount, price, timestamp, expiration, matcherFee, Proofs.empty)
     val sig      = crypto.sign(sender, unsigned.bodyBytes())
-    unsigned.copy(proofs = Proofs(Seq(ByteStr(sig))))
+    unsigned.copy(proofs = Proofs(List(ByteStr(sig))))
   }
 
   def sell(sender: PrivateKeyAccount,
@@ -68,7 +70,7 @@ object OrderV2 {
            matcherFee: Long): Order = {
     val unsigned = OrderV2(sender, matcher, pair, OrderType.SELL, amount, price, timestamp, expiration, matcherFee, Proofs.empty)
     val sig      = crypto.sign(sender, unsigned.bodyBytes())
-    unsigned.copy(proofs = Proofs(Seq(ByteStr(sig))))
+    unsigned.copy(proofs = Proofs(List(ByteStr(sig))))
   }
 
   def apply(sender: PrivateKeyAccount,
@@ -82,7 +84,7 @@ object OrderV2 {
             matcherFee: Long): Order = {
     val unsigned = OrderV2(sender, matcher, pair, orderType, amount, price, timestamp, expiration, matcherFee, Proofs.empty)
     val sig      = crypto.sign(sender, unsigned.bodyBytes())
-    unsigned.copy(proofs = Proofs(Seq(ByteStr(sig))))
+    unsigned.copy(proofs = Proofs(List(ByteStr(sig))))
   }
 
   def parseBytes(bytes: Array[Byte]): Try[Order] = Try {
@@ -103,29 +105,37 @@ object OrderV2 {
     val makeOrder = for {
       version <- readByte
       _ = if (version != 2) { throw new Exception(s"Incorrect order version: expect 2 but found $version") }
-      sender        <- read(PublicKeyAccount.apply, KeyLength)
-      matcher       <- read(PublicKeyAccount.apply, KeyLength)
+      sender  <- read(PublicKeyAccount.apply, KeyLength)
+      matcher <- read(PublicKeyAccount.apply, KeyLength)
       amountAssetId <- parse(Deser.parseByteArrayOption, AssetIdLength)
-      priceAssetId  <- parse(Deser.parseByteArrayOption, AssetIdLength)
-      orderType     <- readByte
-      price         <- read(Longs.fromByteArray _, 8)
-      amount        <- read(Longs.fromByteArray _, 8)
-      timestamp     <- read(Longs.fromByteArray _, 8)
-      expiration    <- read(Longs.fromByteArray _, 8)
-      matcherFee    <- read(Longs.fromByteArray _, 8)
-      maybeProofs   <- readEnd(Proofs.fromBytes)
+        .map {
+          case Some(arr) => IssuedAsset(ByteStr(arr))
+          case None      => Waves
+        }
+      priceAssetId <- parse(Deser.parseByteArrayOption, AssetIdLength)
+        .map {
+          case Some(arr) => IssuedAsset(ByteStr(arr))
+          case None      => Waves
+        }
+      orderType   <- readByte
+      price       <- read(Longs.fromByteArray _, 8)
+      amount      <- read(Longs.fromByteArray _, 8)
+      timestamp   <- read(Longs.fromByteArray _, 8)
+      expiration  <- read(Longs.fromByteArray _, 8)
+      matcherFee  <- read(Longs.fromByteArray _, 8)
+      maybeProofs <- readEnd(Proofs.fromBytes)
     } yield {
       OrderV2(
         sender,
         matcher,
-        AssetPair(amountAssetId.map(ByteStr(_)), priceAssetId.map(ByteStr(_))),
+        AssetPair(amountAssetId, priceAssetId),
         OrderType(orderType),
         amount,
         price,
         timestamp,
         expiration,
         matcherFee,
-        maybeProofs.right.get
+        maybeProofs.explicitGet()
       )
     }
     makeOrder.run(0).value._2

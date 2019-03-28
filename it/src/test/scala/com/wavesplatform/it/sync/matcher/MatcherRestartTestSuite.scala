@@ -1,13 +1,15 @@
 package com.wavesplatform.it.sync.matcher
 
 import com.typesafe.config.Config
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.it.api.OrderBookResponse
 import com.wavesplatform.it.api.SyncHttpApi._
 import com.wavesplatform.it.api.SyncMatcherHttpApi._
 import com.wavesplatform.it.matcher.MatcherSuiteBase
 import com.wavesplatform.it.sync._
 import com.wavesplatform.it.sync.matcher.config.MatcherDefaultConfig._
 import com.wavesplatform.it.util._
-import com.wavesplatform.state.ByteStr
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
 import com.wavesplatform.transaction.assets.exchange.{AssetPair, Order, OrderType}
 
 import scala.concurrent.duration._
@@ -20,10 +22,12 @@ class MatcherRestartTestSuite extends MatcherSuiteBase {
   "check order execution" - {
     // Alice issues new asset
     val aliceAsset =
-      aliceNode.issue(aliceAcc.address, "DisconnectCoin", "Alice's coin for disconnect tests", someAssetAmount, 0, reissuable = false, issueFee, 2).id
+      aliceNode
+        .issue(aliceAcc.address, "DisconnectCoin", "Alice's coin for disconnect tests", someAssetAmount, 0, reissuable = false, smartIssueFee, 2)
+        .id
     matcherNode.waitForTransaction(aliceAsset)
 
-    val aliceWavesPair = AssetPair(ByteStr.decodeBase58(aliceAsset).toOption, None)
+    val aliceWavesPair = AssetPair(IssuedAsset(ByteStr.decodeBase58(aliceAsset).get), Waves)
     // check assets's balances
     matcherNode.assertAssetBalance(aliceAcc.address, aliceAsset, someAssetAmount)
     matcherNode.assertAssetBalance(matcherAcc.address, aliceAsset, 0)
@@ -63,8 +67,8 @@ class MatcherRestartTestSuite extends MatcherSuiteBase {
         matcherNode.placeOrder(aliceAcc, aliceWavesPair, OrderType.SELL, 500, 2.waves * Order.PriceConstant, matcherFee, orderVersion, 5.minutes)
       aliceSecondOrder.status shouldBe "OrderAccepted"
 
-      val orders2 = matcherNode.orderBook(aliceWavesPair)
-      orders2.asks.head.amount shouldBe 1000
+      val orders2 =
+        matcherNode.waitFor[OrderBookResponse]("Top ask has 1000 amount")(_.orderBook(aliceWavesPair), _.asks.head.amount == 1000, 1.second)
       orders2.asks.head.price shouldBe 2.waves * Order.PriceConstant
 
       val cancel = matcherNode.cancelOrder(aliceAcc, aliceWavesPair, firstOrder)

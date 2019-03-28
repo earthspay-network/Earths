@@ -3,13 +3,14 @@ package com.wavesplatform
 import com.typesafe.config.ConfigFactory
 import com.wavesplatform.account.PrivateKeyAccount
 import com.wavesplatform.block.{Block, MicroBlock}
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.consensus.nxt.NxtLikeConsensusBlockData
+import com.wavesplatform.crypto._
 import com.wavesplatform.features.BlockchainFeatures
 import com.wavesplatform.lagonaki.mocks.TestBlock
 import com.wavesplatform.settings.{BlockchainSettings, TestFunctionalitySettings, WavesSettings}
-import com.wavesplatform.state._
 import com.wavesplatform.transaction.Transaction
-import com.wavesplatform.crypto._
 
 package object history {
   val MaxTransactionsPerBlockDiff = 10
@@ -27,7 +28,14 @@ package object history {
   val MicroblocksActivatedAt0BlockchainSettings: BlockchainSettings = DefaultBlockchainSettings.copy(
     functionalitySettings = DefaultBlockchainSettings.functionalitySettings.copy(preActivatedFeatures = Map(BlockchainFeatures.NG.id -> 0)))
 
+  val TransfersV2ActivatedAt0BlockchainSettings: BlockchainSettings =
+    DefaultBlockchainSettings.copy(
+      functionalitySettings =
+        DefaultBlockchainSettings.functionalitySettings.copy(preActivatedFeatures = Map(BlockchainFeatures.SmartAccounts.id -> 0)))
+
   val MicroblocksActivatedAt0WavesSettings: WavesSettings = settings.copy(blockchainSettings = MicroblocksActivatedAt0BlockchainSettings)
+
+  val TransfersV2ActivatedAt0WavesSettings: WavesSettings = settings.copy(blockchainSettings = TransfersV2ActivatedAt0BlockchainSettings)
 
   val DefaultWavesSettings: WavesSettings = settings.copy(blockchainSettings = DefaultBlockchainSettings,
                                                           featuresSettings = settings.featuresSettings.copy(autoShutdownOnUnsupportedFeature = false))

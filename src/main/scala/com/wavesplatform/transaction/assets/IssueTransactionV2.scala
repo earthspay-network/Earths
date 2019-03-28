@@ -1,20 +1,23 @@
 package com.wavesplatform.transaction.assets
 
+import cats.implicits._
 import com.google.common.primitives.Bytes
-import com.wavesplatform.crypto
-import com.wavesplatform.state.ByteStr
-import monix.eval.Coeval
 import com.wavesplatform.account.{AddressScheme, PrivateKeyAccount, PublicKeyAccount}
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.EitherExt2
+import com.wavesplatform.crypto
 import com.wavesplatform.serialization.Deser
-import com.wavesplatform.transaction.ValidationError.{GenericError, UnsupportedVersion}
+import com.wavesplatform.transaction.ValidationError.GenericError
 import com.wavesplatform.transaction._
-import com.wavesplatform.transaction.smart.script.{Script, ScriptReader}
+import com.wavesplatform.transaction.description._
+import com.wavesplatform.transaction.smart.script.Script
+import com.wavesplatform.transaction.smart.script.v1.ExprScript
+import monix.eval.Coeval
 import play.api.libs.json.{JsObject, Json}
 
 import scala.util.Try
 
-case class IssueTransactionV2 private (version: Byte,
-                                       chainId: Byte,
+case class IssueTransactionV2 private (chainId: Byte,
                                        sender: PublicKeyAccount,
                                        name: Array[Byte],
                                        description: Array[Byte],
@@ -28,16 +31,22 @@ case class IssueTransactionV2 private (version: Byte,
     extends IssueTransaction
     with FastHashId
     with ChainSpecific {
-  override val builder: TransactionParser = IssueTransactionV2
-  override val bodyBytes: Coeval[Array[Byte]] = Coeval.evalOnce(
-    Bytes.concat(
-      Array(builder.typeId, version, chainId),
-      bytesBase(),
-      Deser.serializeOption(script)(s => s.bytes().arr)
-    ))
-  override val bytes: Coeval[Array[Byte]] = Coeval.evalOnce(Bytes.concat(Array(0: Byte), bodyBytes(), proofs.bytes()))
 
-  override val json: Coeval[JsObject] = Coeval.evalOnce(issueJson() ++ Json.obj("chainId" -> chainId, "script" -> script.map(_.bytes().base64)))
+  override val builder: TransactionParser = IssueTransactionV2
+
+  override val bodyBytes: Coeval[Array[Byte]] =
+    Coeval.evalOnce(
+      Bytes.concat(
+        Array(builder.typeId, version, chainId),
+        bytesBase(),
+        Deser.serializeOption(script)(s => s.bytes().arr)
+      )
+    )
+
+  override val bytes: Coeval[Array[Byte]] = Coeval.evalOnce(Bytes.concat(Array(0: Byte), bodyBytes(), proofs.bytes()))
+  override val json: Coeval[JsObject]     = Coeval.evalOnce(issueJson() ++ Json.obj("chainId" -> chainId, "script" -> script.map(_.bytes().base64)))
+
+  override def version: Byte = 2
 }
 
 object IssueTransactionV2 extends TransactionParserFor[IssueTransactionV2] with TransactionParser.MultipleVersions {
@@ -45,31 +54,19 @@ object IssueTransactionV2 extends TransactionParserFor[IssueTransactionV2] with 
   override val typeId: Byte                 = IssueTransaction.typeId
   override val supportedVersions: Set[Byte] = Set(2)
 
-  private def networkByte = AddressScheme.current.chainId
+  private def currentChainId = AddressScheme.current.chainId
 
-  override protected def parseTail(version: Byte, bytes: Array[Byte]): Try[TransactionT] =
-    Try {
-      val chainId                                                                                       = bytes(0)
-      val (sender, assetName, description, quantity, decimals, reissuable, fee, timestamp, scriptStart) = IssueTransaction.parseBase(bytes, 1)
-      val (scriptOptEi: Option[Either[ValidationError.ScriptParseError, Script]], scriptEnd) =
-        Deser.parseOption(bytes, scriptStart)(ScriptReader.fromBytes)
-      val scriptEiOpt: Either[ValidationError.ScriptParseError, Option[Script]] = scriptOptEi match {
-        case None            => Right(None)
-        case Some(Right(sc)) => Right(Some(sc))
-        case Some(Left(err)) => Left(err)
-      }
+  override protected def parseTail(bytes: Array[Byte]): Try[TransactionT] = {
+    byteTailDescription.deserializeFromByteArray(bytes).flatMap { tx =>
+      Either
+        .cond(tx.chainId == currentChainId, (), GenericError(s"Wrong chainId actual: ${tx.chainId.toInt}, expected: $currentChainId"))
+        .flatMap(_ => IssueTransaction.validateIssueParams(tx))
+        .map(_ => tx)
+        .foldToTry
+    }
+  }
 
-      (for {
-        proofs <- Proofs.fromBytes(bytes.drop(scriptEnd))
-        script <- scriptEiOpt
-        tx <- IssueTransactionV2
-          .create(version, chainId, sender, assetName, description, quantity, decimals, reissuable, script, fee, timestamp, proofs)
-      } yield tx).left.map(e => new Throwable(e.toString)).toTry
-
-    }.flatten
-
-  def create(version: Byte,
-             chainId: Byte,
+  def create(chainId: Byte,
              sender: PublicKeyAccount,
              name: Array[Byte],
              description: Array[Byte],
@@ -79,15 +76,17 @@ object IssueTransactionV2 extends TransactionParserFor[IssueTransactionV2] with 
              script: Option[Script],
              fee: Long,
              timestamp: Long,
-             proofs: Proofs): Either[ValidationError, TransactionT] =
+             proofs: Proofs): Either[ValidationError, TransactionT] = {
     for {
-      _ <- Either.cond(supportedVersions.contains(version), (), UnsupportedVersion(version))
-      _ <- Either.cond(chainId == networkByte, (), GenericError(s"Wrong chainId actual: ${chainId.toInt}, expected: $networkByte"))
+      _ <- Either.cond(chainId == currentChainId, (), GenericError(s"Wrong chainId actual: ${chainId.toInt}, expected: $currentChainId"))
       _ <- IssueTransaction.validateIssueParams(name, description, quantity, decimals, reissuable, fee)
-    } yield IssueTransactionV2(version, chainId, sender, name, description, quantity, decimals, reissuable, script, fee, timestamp, proofs)
+      _ <- Either.cond(script.forall(_.isInstanceOf[ExprScript]),
+                       (),
+                       ValidationError.GenericError(s"Asset can only be assigned with Expression script, not Contract"))
+    } yield IssueTransactionV2(chainId, sender, name, description, quantity, decimals, reissuable, script, fee, timestamp, proofs)
+  }
 
-  def signed(version: Byte,
-             chainId: Byte,
+  def signed(chainId: Byte,
              sender: PublicKeyAccount,
              name: Array[Byte],
              description: Array[Byte],
@@ -97,14 +96,14 @@ object IssueTransactionV2 extends TransactionParserFor[IssueTransactionV2] with 
              script: Option[Script],
              fee: Long,
              timestamp: Long,
-             signer: PrivateKeyAccount): Either[ValidationError, TransactionT] =
+             signer: PrivateKeyAccount): Either[ValidationError, TransactionT] = {
     for {
-      unverified <- create(version, chainId, sender, name, description, quantity, decimals, reissuable, script, fee, timestamp, Proofs.empty)
+      unverified <- create(chainId, sender, name, description, quantity, decimals, reissuable, script, fee, timestamp, Proofs.empty)
       proofs     <- Proofs.create(Seq(ByteStr(crypto.sign(signer, unverified.bodyBytes()))))
     } yield unverified.copy(proofs = proofs)
+  }
 
-  def selfSigned(version: Byte,
-                 chainId: Byte,
+  def selfSigned(chainId: Byte,
                  sender: PrivateKeyAccount,
                  name: Array[Byte],
                  description: Array[Byte],
@@ -113,6 +112,38 @@ object IssueTransactionV2 extends TransactionParserFor[IssueTransactionV2] with 
                  reissuable: Boolean,
                  script: Option[Script],
                  fee: Long,
-                 timestamp: Long): Either[ValidationError, TransactionT] =
-    signed(version, chainId, sender, name, description, quantity, decimals, reissuable, script, fee, timestamp, sender)
+                 timestamp: Long): Either[ValidationError, TransactionT] = {
+    signed(chainId, sender, name, description, quantity, decimals, reissuable, script, fee, timestamp, sender)
+  }
+
+  val byteTailDescription: ByteEntity[IssueTransactionV2] = {
+    (
+      OneByte(tailIndex(1), "Chain ID"),
+      PublicKeyAccountBytes(tailIndex(2), "Sender's public key"),
+      BytesArrayUndefinedLength(tailIndex(3), "Name"),
+      BytesArrayUndefinedLength(tailIndex(4), "Description"),
+      LongBytes(tailIndex(5), "Quantity"),
+      OneByte(tailIndex(6), "Decimals"),
+      BooleanByte(tailIndex(7), "Reissuable flag (1 - True, 0 - False)"),
+      LongBytes(tailIndex(8), "Fee"),
+      LongBytes(tailIndex(9), "Timestamp"),
+      OptionBytes(index = tailIndex(10), name = "Script", nestedByteEntity = ScriptBytes(tailIndex(10), "Script")),
+      ProofsBytes(tailIndex(11))
+    ) mapN {
+      case (chainId, senderPublicKey, name, desc, quantity, decimals, reissuable, fee, timestamp, script, proofs) =>
+        IssueTransactionV2(
+          chainId = chainId,
+          sender = senderPublicKey,
+          name = name,
+          description = desc,
+          quantity = quantity,
+          decimals = decimals,
+          reissuable = reissuable,
+          script = script,
+          fee = fee,
+          timestamp = timestamp,
+          proofs = proofs
+        )
+    }
+  }
 }

@@ -9,15 +9,16 @@ import com.wavesplatform.api.http.alias.{CreateAliasV1Request, CreateAliasV2Requ
 import com.wavesplatform.api.http.assets.SponsorFeeRequest._
 import com.wavesplatform.api.http.assets._
 import com.wavesplatform.api.http.leasing._
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.http.BroadcastRoute
 import com.wavesplatform.settings.{FunctionalitySettings, RestAPISettings}
+import com.wavesplatform.state.Blockchain
 import com.wavesplatform.state.diffs.CommonValidation
-import com.wavesplatform.state.{Blockchain, ByteStr}
 import com.wavesplatform.transaction.ValidationError.GenericError
 import com.wavesplatform.transaction._
 import com.wavesplatform.transaction.assets._
 import com.wavesplatform.transaction.lease._
-import com.wavesplatform.transaction.smart.SetScriptTransaction
+import com.wavesplatform.transaction.smart.{InvokeScriptTransaction, SetScriptTransaction}
 import com.wavesplatform.transaction.transfer._
 import com.wavesplatform.utils.Time
 import com.wavesplatform.utx.UtxPool
@@ -62,34 +63,8 @@ case class TransactionsApiRoute(settings: RestAPISettings,
       new ApiImplicitParam(name = "after", value = "Id of transaction to paginate after", required = false, dataType = "string", paramType = "query")
     ))
   def addressLimit: Route = {
-    def getResponse(address: Address, limit: Int, fromId: Option[ByteStr]): Either[String, JsArray] =
-      blockchain
-        .addressTransactions(address, Set.empty, limit, fromId)
-        .map(_.map { case (h, tx) => txToCompactJson(address, tx) + ("height" -> JsNumber(h)) })
-        .map(txs => Json.arr(JsArray(txs)))
-
-    (get & pathPrefix("address" / Segment)) { address =>
-      Address.fromString(address) match {
-        case Left(e) => complete(ApiError.fromValidationError(e))
-        case Right(a) =>
-          (path("limit" / IntNumber) & parameter('after.?)) { (limit, after) =>
-            if (limit > settings.transactionByAddressLimit) complete(TooBigArrayAllocation)
-            else
-              after match {
-                case Some(t) =>
-                  ByteStr.decodeBase58(t) match {
-                    case Success(id) =>
-                      getResponse(a, limit, Some(id)).fold(
-                        _ => complete(StatusCodes.NotFound -> Json.obj("status" -> "error", "details" -> "Transaction is not in blockchain")),
-                        complete(_))
-                    case _ => complete(CustomValidationError(s"Unable to decode transaction id $t"))
-                  }
-                case None =>
-                  getResponse(a, limit, None)
-                    .fold(_ => complete(StatusCodes.NotFound), complete(_))
-              }
-          } ~ complete(CustomValidationError("invalid.limit"))
-      }
+    (get & path("address" / Segment / "limit" / IntNumber) & parameter('after.?)) { (address, limit, maybeAfter) =>
+      complete(transactionsByAddress(address, limit, maybeAfter))
     }
   }
 
@@ -171,6 +146,7 @@ case class TransactionsApiRoute(settings: RestAPISettings,
             "fee"    -> 1234567,
             "sender" -> senderPk
           )
+
           createTransaction(senderPk, enrichedJsv) { tx =>
             CommonValidation.getMinFee(blockchain, functionalitySettings, blockchain.height, tx).map {
               case (assetId, assetAmount, wavesAmount) =>
@@ -241,25 +217,28 @@ case class TransactionsApiRoute(settings: RestAPISettings,
           case None => Left(GenericError(s"Bad transaction type ($typeId) and version ($version)"))
           case Some(x) =>
             x match {
-              case IssueTransactionV1        => TransactionFactory.issueAssetV1(txJson.as[IssueV1Request], wallet, signerAddress, time)
-              case IssueTransactionV2        => TransactionFactory.issueAssetV2(txJson.as[IssueV2Request], wallet, signerAddress, time)
-              case TransferTransactionV1     => TransactionFactory.transferAssetV1(txJson.as[TransferV1Request], wallet, signerAddress, time)
-              case TransferTransactionV2     => TransactionFactory.transferAssetV2(txJson.as[TransferV2Request], wallet, signerAddress, time)
-              case ReissueTransactionV1      => TransactionFactory.reissueAssetV1(txJson.as[ReissueV1Request], wallet, signerAddress, time)
-              case ReissueTransactionV2      => TransactionFactory.reissueAssetV2(txJson.as[ReissueV2Request], wallet, signerAddress, time)
-              case BurnTransactionV1         => TransactionFactory.burnAssetV1(txJson.as[BurnV1Request], wallet, signerAddress, time)
-              case BurnTransactionV2         => TransactionFactory.burnAssetV2(txJson.as[BurnV2Request], wallet, signerAddress, time)
-              case MassTransferTransaction   => TransactionFactory.massTransferAsset(txJson.as[MassTransferRequest], wallet, signerAddress, time)
-              case LeaseTransactionV1        => TransactionFactory.leaseV1(txJson.as[LeaseV1Request], wallet, signerAddress, time)
-              case LeaseTransactionV2        => TransactionFactory.leaseV2(txJson.as[LeaseV2Request], wallet, signerAddress, time)
-              case LeaseCancelTransactionV1  => TransactionFactory.leaseCancelV1(txJson.as[LeaseCancelV1Request], wallet, signerAddress, time)
-              case LeaseCancelTransactionV2  => TransactionFactory.leaseCancelV2(txJson.as[LeaseCancelV2Request], wallet, signerAddress, time)
-              case CreateAliasTransactionV1  => TransactionFactory.aliasV1(txJson.as[CreateAliasV1Request], wallet, signerAddress, time)
-              case CreateAliasTransactionV2  => TransactionFactory.aliasV2(txJson.as[CreateAliasV2Request], wallet, signerAddress, time)
-              case DataTransaction           => TransactionFactory.data(txJson.as[DataRequest], wallet, signerAddress, time)
+              case IssueTransactionV1       => TransactionFactory.issueAssetV1(txJson.as[IssueV1Request], wallet, signerAddress, time)
+              case IssueTransactionV2       => TransactionFactory.issueAssetV2(txJson.as[IssueV2Request], wallet, signerAddress, time)
+              case TransferTransactionV1    => TransactionFactory.transferAssetV1(txJson.as[TransferV1Request], wallet, signerAddress, time)
+              case TransferTransactionV2    => TransactionFactory.transferAssetV2(txJson.as[TransferV2Request], wallet, signerAddress, time)
+              case ReissueTransactionV1     => TransactionFactory.reissueAssetV1(txJson.as[ReissueV1Request], wallet, signerAddress, time)
+              case ReissueTransactionV2     => TransactionFactory.reissueAssetV2(txJson.as[ReissueV2Request], wallet, signerAddress, time)
+              case BurnTransactionV1        => TransactionFactory.burnAssetV1(txJson.as[BurnV1Request], wallet, signerAddress, time)
+              case BurnTransactionV2        => TransactionFactory.burnAssetV2(txJson.as[BurnV2Request], wallet, signerAddress, time)
+              case MassTransferTransaction  => TransactionFactory.massTransferAsset(txJson.as[MassTransferRequest], wallet, signerAddress, time)
+              case LeaseTransactionV1       => TransactionFactory.leaseV1(txJson.as[LeaseV1Request], wallet, signerAddress, time)
+              case LeaseTransactionV2       => TransactionFactory.leaseV2(txJson.as[LeaseV2Request], wallet, signerAddress, time)
+              case LeaseCancelTransactionV1 => TransactionFactory.leaseCancelV1(txJson.as[LeaseCancelV1Request], wallet, signerAddress, time)
+              case LeaseCancelTransactionV2 => TransactionFactory.leaseCancelV2(txJson.as[LeaseCancelV2Request], wallet, signerAddress, time)
+              case CreateAliasTransactionV1 => TransactionFactory.aliasV1(txJson.as[CreateAliasV1Request], wallet, signerAddress, time)
+              case CreateAliasTransactionV2 => TransactionFactory.aliasV2(txJson.as[CreateAliasV2Request], wallet, signerAddress, time)
+              case DataTransaction          => TransactionFactory.data(txJson.as[DataRequest], wallet, signerAddress, time)
+              case InvokeScriptTransaction =>
+                TransactionFactory.invokeScript(txJson.as[InvokeScriptRequest], wallet, signerAddress, time)
               case SetScriptTransaction      => TransactionFactory.setScript(txJson.as[SetScriptRequest], wallet, signerAddress, time)
               case SetAssetScriptTransaction => TransactionFactory.setAssetScript(txJson.as[SetAssetScriptRequest], wallet, signerAddress, time)
               case SponsorFeeTransaction     => TransactionFactory.sponsor(txJson.as[SponsorFeeRequest], wallet, signerAddress, time)
+              case _                         => Left(ValidationError.UnsupportedTransactionType)
             }
         }).fold(ApiError.fromValidationError, _.json())
     }
@@ -297,17 +276,43 @@ case class TransactionsApiRoute(settings: RestAPISettings,
     }
   }
 
-  /**
-    * Produces compact representation for large transactions by stripping unnecessary data.
-    * Currently implemented for MassTransfer transaction only.
-    */
-  private def txToCompactJson(address: Address, tx: Transaction): JsObject = {
-    import com.wavesplatform.transaction.transfer._
-    tx match {
-      case mtt: MassTransferTransaction if mtt.sender.toAddress != address =>
-        val addresses = blockchain.aliasesOfAddress(address) :+ address
-        mtt.compactJson(addresses.toSet)
-      case _ => txToExtendedJson(tx)
+  def transactionsByAddress(addressParam: String, limitParam: Int, maybeAfterParam: Option[String]): Either[ApiError, JsArray] = {
+    def createTransactionsJsonArray(address: Address, limit: Int, fromId: Option[ByteStr]): Either[String, JsArray] = {
+      lazy val addressesCached = concurrent.blocking((blockchain.aliasesOfAddress(address) :+ address).toSet)
+
+      /**
+        * Produces compact representation for large transactions by stripping unnecessary data.
+        * Currently implemented for MassTransfer transaction only.
+        */
+      def txToCompactJson(address: Address, tx: Transaction): JsObject = {
+        import com.wavesplatform.transaction.transfer._
+        tx match {
+          case mtt: MassTransferTransaction if mtt.sender.toAddress != address => mtt.compactJson(addressesCached)
+          case _                                                               => txToExtendedJson(tx)
+        }
+      }
+
+      val txs = concurrent.blocking(blockchain.addressTransactions(address, Set.empty, limit, fromId))
+      txs.map(txs => Json.arr(JsArray(txs.map { case (height, tx) => txToCompactJson(address, tx) + ("height" -> JsNumber(height)) })))
     }
+
+    for {
+      address <- Address.fromString(addressParam).left.map(ApiError.fromValidationError)
+      limit   <- Either.cond(limitParam <= settings.transactionByAddressLimit, limitParam, TooBigArrayAllocation)
+      maybeAfter <- maybeAfterParam match {
+        case Some(v) =>
+          ByteStr
+            .decodeBase58(v)
+            .fold(
+              _ => Left(CustomValidationError(s"Unable to decode transaction id $v")),
+              id => Right(Some(id))
+            )
+        case None => Right(None)
+      }
+      result <- createTransactionsJsonArray(address, limit, maybeAfter).fold(
+        err => Left(CustomValidationError(err)),
+        arr => Right(arr)
+      )
+    } yield result
   }
 }

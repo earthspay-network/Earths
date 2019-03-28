@@ -4,18 +4,17 @@ import cats.implicits._
 import com.google.common.base.Charsets
 import com.wavesplatform.account.{AddressScheme, PublicKeyAccount}
 import com.wavesplatform.api.http.BroadcastRequest
-import com.wavesplatform.transaction.assets.IssueTransactionV2
+import com.wavesplatform.transaction.assets.{IssueTransaction, IssueTransactionV2}
 import com.wavesplatform.transaction.smart.script.Script
 import com.wavesplatform.transaction.{Proofs, ValidationError}
 import io.swagger.annotations.{ApiModel, ApiModelProperty}
 import play.api.libs.functional.syntax._
-import play.api.libs.json.{JsPath, Reads}
+import play.api.libs.json._
 
 object SignedIssueV2Request {
   implicit val signedExchangeRequestReads: Reads[SignedIssueV2Request] = {
     (
-      (JsPath \ "version").read[Byte] and
-        (JsPath \ "senderPublicKey").read[String] and
+      (JsPath \ "senderPublicKey").read[String] and
         (JsPath \ "name").read[String] and
         (JsPath \ "description").read[String] and
         (JsPath \ "quantity").read[Long] and
@@ -27,12 +26,17 @@ object SignedIssueV2Request {
         (JsPath \ "script").readNullable[String]
     )(SignedIssueV2Request.apply _)
   }
+  implicit val writes: Writes[SignedIssueV2Request] =
+    Json
+      .writes[SignedIssueV2Request]
+      .transform(
+        (request: JsObject) =>
+          request + ("version" -> JsNumber(2))
+            + ("type"          -> JsNumber(IssueTransaction.typeId.toInt)))
 }
 
 @ApiModel(value = "Signed Smart issue transaction")
-case class SignedIssueV2Request(@ApiModelProperty(required = true)
-                                version: Byte,
-                                @ApiModelProperty(value = "Base58 encoded Issuer public key", required = true)
+case class SignedIssueV2Request(@ApiModelProperty(value = "Base58 encoded Issuer public key", required = true)
                                 senderPublicKey: String,
                                 @ApiModelProperty(required = true)
                                 name: String,
@@ -63,7 +67,6 @@ case class SignedIssueV2Request(@ApiModelProperty(required = true)
         case Some(s) => Script.fromBase64String(s).map(Some(_))
       }
       t <- IssueTransactionV2.create(
-        version,
         AddressScheme.current.chainId,
         _sender,
         name.getBytes(Charsets.UTF_8),

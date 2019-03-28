@@ -1,16 +1,16 @@
 package com.wavesplatform.it.sync.smartcontract
 
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.{Base58, EitherExt2}
 import com.wavesplatform.crypto
 import com.wavesplatform.it.api.SyncHttpApi._
-import com.wavesplatform.it.sync.{minFee, transferAmount, setScriptFee}
+import com.wavesplatform.it.sync.{minFee, setScriptFee, transferAmount}
 import com.wavesplatform.it.transactions.BaseTransactionSuite
 import com.wavesplatform.it.util._
-import com.wavesplatform.state._
 import com.wavesplatform.transaction.Proofs
 import com.wavesplatform.transaction.lease.LeaseTransactionV2
 import com.wavesplatform.transaction.smart.SetScriptTransaction
 import com.wavesplatform.transaction.smart.script.ScriptCompiler
-import com.wavesplatform.utils.Base58
 import org.scalatest.CancelAfterFailure
 
 class BigString extends BaseTransactionSuite with CancelAfterFailure {
@@ -19,13 +19,13 @@ class BigString extends BaseTransactionSuite with CancelAfterFailure {
   private val acc2 = pkByAddress(thirdAddress)
 
   test("set contract, make leasing and cancel leasing") {
-    val (balance1, eff1) = notMiner.accountBalances(acc0.address)
-    val (balance2, eff2) = notMiner.accountBalances(thirdAddress)
+    val (balance1, eff1) = miner.accountBalances(acc0.address)
+    val (balance2, eff2) = miner.accountBalances(thirdAddress)
 
     val txId = sender.transfer(sender.address, acc0.address, 10 * transferAmount, minFee).id
     nodes.waitForHeightAriseAndTxPresent(txId)
 
-    notMiner.assertBalances(firstAddress, balance1 + 10 * transferAmount, eff1 + 10 * transferAmount)
+    miner.assertBalances(firstAddress, balance1 + 10 * transferAmount, eff1 + 10 * transferAmount)
 
     val scriptText = s"""
         let pkA = base58'${ByteStr(acc0.publicKey)}'
@@ -44,7 +44,7 @@ class BigString extends BaseTransactionSuite with CancelAfterFailure {
 
     val script = ScriptCompiler(scriptText, isAssetScript = false).explicitGet()._1
     val setScriptTransaction = SetScriptTransaction
-      .selfSigned(SetScriptTransaction.supportedVersions.head, acc0, Some(script), setScriptFee, System.currentTimeMillis())
+      .selfSigned(acc0, Some(script), setScriptFee, System.currentTimeMillis())
       .explicitGet()
 
     val setScriptId = sender
@@ -56,7 +56,6 @@ class BigString extends BaseTransactionSuite with CancelAfterFailure {
     val unsignedLeasing =
       LeaseTransactionV2
         .create(
-          2,
           acc0,
           transferAmount,
           minFee + 0.2.waves,
@@ -79,8 +78,8 @@ class BigString extends BaseTransactionSuite with CancelAfterFailure {
     nodes.waitForHeightArise()
     nodes(0).findTransactionInfo(leasingId) shouldBe None
 
-    notMiner.assertBalances(firstAddress, balance1 + 10 * transferAmount - setScriptFee, eff1 + 10 * transferAmount - setScriptFee)
-    notMiner.assertBalances(thirdAddress, balance2, eff2)
+    miner.assertBalances(firstAddress, balance1 + 10 * transferAmount - setScriptFee, eff1 + 10 * transferAmount - setScriptFee)
+    miner.assertBalances(thirdAddress, balance2, eff2)
 
   }
 }

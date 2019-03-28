@@ -1,12 +1,13 @@
 package com.wavesplatform.it.sync.matcher
 
 import com.typesafe.config.Config
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.it.api.SyncHttpApi._
 import com.wavesplatform.it.api.SyncMatcherHttpApi._
 import com.wavesplatform.it.matcher.MatcherSuiteBase
 import com.wavesplatform.it.sync._
 import com.wavesplatform.it.sync.matcher.config.MatcherDefaultConfig._
-import com.wavesplatform.state.ByteStr
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
 import com.wavesplatform.transaction.assets.exchange.{AssetPair, OrderType}
 
 import scala.concurrent.duration._
@@ -18,7 +19,14 @@ class MatcherMigrationTestSuite extends MatcherSuiteBase {
     // Alice issues new asset
     val aliceAsset =
       aliceNode
-        .issue(aliceAcc.address, "DisconnectCoin", "Alice's coin for disconnect tests", 1000 * someAssetAmount, 8, reissuable = false, issueFee, 2)
+        .issue(aliceAcc.address,
+               "DisconnectCoin",
+               "Alice's coin for disconnect tests",
+               1000 * someAssetAmount,
+               8,
+               reissuable = false,
+               smartIssueFee,
+               2)
         .id
     nodes.waitForHeightAriseAndTxPresent(aliceAsset)
 
@@ -26,7 +34,7 @@ class MatcherMigrationTestSuite extends MatcherSuiteBase {
     val t1           = aliceNode.transfer(aliceAcc.address, matcherAcc.address, aliceBalance - minFee - 250000, minFee, None, None, 2).id
     nodes.waitForHeightAriseAndTxPresent(t1)
 
-    val aliceWavesPair = AssetPair(ByteStr.decodeBase58(aliceAsset).toOption, None)
+    val aliceWavesPair = AssetPair(IssuedAsset(ByteStr.decodeBase58(aliceAsset).get), Waves)
 
     "place order and run migration tool" in {
       // Alice places sell order

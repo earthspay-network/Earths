@@ -7,16 +7,19 @@ import com.google.common.cache.CacheBuilder
 import com.wavesplatform.utils.ScorexLogging
 import com.wavesplatform.block.Block.BlockId
 import com.wavesplatform.block.{Block, MicroBlock}
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.transaction.{DiscardedMicroBlocks, Transaction}
 
 import scala.collection.mutable.{ListBuffer => MList, Map => MMap}
 
+/* This is not thread safe, used only from BlockchainUpdaterImpl */
 class NgState(val base: Block, val baseBlockDiff: Diff, val baseBlockCarry: Long, val approvedFeatures: Set[Short]) extends ScorexLogging {
 
   private val MaxTotalDiffs = 3
 
   private val microDiffs: MMap[BlockId, (Diff, Long, Long)] = MMap.empty  // microDiff, carryFee, timestamp
   private val micros: MList[MicroBlock]                     = MList.empty // fresh head
+
   private val totalBlockDiffCache = CacheBuilder
     .newBuilder()
     .maximumSize(MaxTotalDiffs)
@@ -25,19 +28,25 @@ class NgState(val base: Block, val baseBlockDiff: Diff, val baseBlockCarry: Long
 
   def microBlockIds: Seq[BlockId] = micros.map(_.totalResBlockSig).toList
 
-  private def diffFor(totalResBlockSig: BlockId): (Diff, Long) =
+  def diffFor(totalResBlockSig: BlockId): (Diff, Long) =
     if (totalResBlockSig == base.uniqueId)
       (baseBlockDiff, baseBlockCarry)
     else
       Option(totalBlockDiffCache.getIfPresent(totalResBlockSig)) match {
         case Some(d) => d
         case None =>
-          val prevResBlockSig          = micros.find(_.totalResBlockSig == totalResBlockSig).get.prevResBlockSig
-          val (prevDiff, prevCarry)    = Option(totalBlockDiffCache.getIfPresent(prevResBlockSig)).getOrElse(diffFor(prevResBlockSig))
-          val (currDiff, currCarry, _) = microDiffs(totalResBlockSig)
-          val r                        = (Monoid.combine(prevDiff, currDiff), prevCarry + currCarry)
-          totalBlockDiffCache.put(totalResBlockSig, r)
-          r
+          micros.find(_.totalResBlockSig == totalResBlockSig) match {
+            case Some(current) =>
+              val prevResBlockSig          = current.prevResBlockSig
+              val (prevDiff, prevCarry)    = Option(totalBlockDiffCache.getIfPresent(prevResBlockSig)).getOrElse(diffFor(prevResBlockSig))
+              val (currDiff, currCarry, _) = microDiffs(totalResBlockSig)
+              val r                        = (Monoid.combine(prevDiff, currDiff), prevCarry + currCarry)
+              totalBlockDiffCache.put(totalResBlockSig, r)
+              r
+
+            case None =>
+              (Diff.empty, 0L)
+          }
       }
 
   def bestLiquidBlockId: BlockId =

@@ -3,12 +3,15 @@ package com.wavesplatform.generator.utils
 import java.util.concurrent.ThreadLocalRandom
 
 import com.wavesplatform.account.{Address, PrivateKeyAccount}
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.generator.utils.Implicits._
-import com.wavesplatform.state.{BinaryDataEntry, BooleanDataEntry, ByteStr, DataEntry, IntegerDataEntry, StringDataEntry}
+import com.wavesplatform.state.{BinaryDataEntry, BooleanDataEntry, DataEntry, IntegerDataEntry, StringDataEntry}
+import com.wavesplatform.transaction.Asset.Waves
+import com.wavesplatform.transaction.Transaction
 import com.wavesplatform.transaction.smart.script.{Script, ScriptCompiler}
 import com.wavesplatform.transaction.transfer.MassTransferTransaction.ParsedTransfer
 import com.wavesplatform.transaction.transfer._
-import com.wavesplatform.transaction.{Proofs, Transaction}
 import com.wavesplatform.utils.LoggerFacade
 import org.slf4j.LoggerFactory
 import scorex.crypto.signatures.Curve25519._
@@ -99,7 +102,7 @@ object Gen {
 
     val (script, _) = ScriptCompiler(src, isAssetScript = false)
       .explicitGet()
-    log.info(s"${script.text}")
+
     script
   }
 
@@ -110,25 +113,30 @@ object Gen {
   }
 
   def transfers(senderGen: Iterator[PrivateKeyAccount], recipientGen: Iterator[Address], feeGen: Iterator[Long]): Iterator[Transaction] = {
+    val now = System.currentTimeMillis()
+
     senderGen
       .zip(recipientGen)
       .zip(feeGen)
+      .zipWithIndex
       .map {
-        case ((src, dst), fee) =>
-          TransferTransactionV1.selfSigned(None, src, dst, fee, System.currentTimeMillis(), None, fee, Array.emptyByteArray)
+        case (((src, dst), fee), i) =>
+          TransferTransactionV1.selfSigned(Waves, src, dst, fee, now + i, Waves, fee, Array.emptyByteArray)
       }
       .collect { case Right(x) => x }
   }
 
   def massTransfers(senderGen: Iterator[PrivateKeyAccount], recipientGen: Iterator[Address], amountGen: Iterator[Long]): Iterator[Transaction] = {
+    val now              = System.currentTimeMillis()
     val transferCountGen = Iterator.continually(random.nextInt(MassTransferTransaction.MaxTransferCount + 1))
     senderGen
       .zip(transferCountGen)
+      .zipWithIndex
       .map {
-        case (sender, count) =>
+        case ((sender, count), i) =>
           val transfers = List.tabulate(count)(_ => ParsedTransfer(recipientGen.next(), amountGen.next()))
           val fee       = 100000 + count * 50000
-          MassTransferTransaction.selfSigned(Proofs.Version, None, sender, transfers, System.currentTimeMillis, fee, Array.emptyByteArray)
+          MassTransferTransaction.selfSigned(Waves, sender, transfers, now + i, fee, Array.emptyByteArray)
       }
       .collect { case Right(tx) => tx }
   }

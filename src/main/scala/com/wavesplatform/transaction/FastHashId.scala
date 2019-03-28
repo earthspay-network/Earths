@@ -1,10 +1,15 @@
 package com.wavesplatform.transaction
 
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.crypto
-import com.wavesplatform.state.ByteStr
 import monix.eval.Coeval
 
 trait FastHashId extends ProvenTransaction {
+  val id: Coeval[ByteStr] = Coeval.evalOnce(FastHashId.create(this.bodyBytes()))
+}
 
-  val id: Coeval[AssetId] = Coeval.evalOnce(ByteStr(crypto.fastHash(bodyBytes())))
+object FastHashId {
+  def create(bodyBytes: Array[Byte]): ByteStr = {
+    ByteStr(crypto.fastHash(bodyBytes))
+  }
 }

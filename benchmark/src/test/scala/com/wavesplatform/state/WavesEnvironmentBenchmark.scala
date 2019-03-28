@@ -5,6 +5,8 @@ import java.util.concurrent.{ThreadLocalRandom, TimeUnit}
 
 import com.typesafe.config.ConfigFactory
 import com.wavesplatform.account.{AddressOrAlias, AddressScheme, Alias}
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.{Base58, EitherExt2}
 import com.wavesplatform.database.LevelDBWriter
 import com.wavesplatform.db.LevelDBFactory
 import com.wavesplatform.lang.v1.traits.Environment
@@ -13,12 +15,13 @@ import com.wavesplatform.settings.{WavesSettings, loadConfig}
 import com.wavesplatform.state.WavesEnvironmentBenchmark._
 import com.wavesplatform.state.bench.DataTestData
 import com.wavesplatform.transaction.smart.WavesEnvironment
-import com.wavesplatform.utils.Base58
 import monix.eval.Coeval
+import monix.execution.UncaughtExceptionReporter
+import monix.reactive.Observer
 import org.iq80.leveldb.{DB, Options}
 import org.openjdk.jmh.annotations._
 import org.openjdk.jmh.infra.Blackhole
-import scodec.bits.{BitVector, ByteVector}
+import scodec.bits.BitVector
 
 import scala.io.Codec
 
@@ -55,12 +58,12 @@ class WavesEnvironmentBenchmark {
 
   @Benchmark
   def accountBalanceOf_waves_test(st: AccountBalanceOfWavesSt, bh: Blackhole): Unit = {
-    bh.consume(st.environment.accountBalanceOf(Recipient.Address(ByteVector(st.accounts.random)), None))
+    bh.consume(st.environment.accountBalanceOf(Recipient.Address(ByteStr(st.accounts.random)), None))
   }
 
   @Benchmark
   def accountBalanceOf_asset_test(st: AccountBalanceOfAssetSt, bh: Blackhole): Unit = {
-    bh.consume(st.environment.accountBalanceOf(Recipient.Address(ByteVector(st.accounts.random)), Some(st.assets.random)))
+    bh.consume(st.environment.accountBalanceOf(Recipient.Address(ByteStr(st.accounts.random)), Some(st.assets.random)))
   }
 
   @Benchmark
@@ -80,7 +83,7 @@ object WavesEnvironmentBenchmark {
 
   @State(Scope.Benchmark)
   class TransactionByIdSt extends BaseSt {
-    val allTxs: Vector[Array[Byte]] = load("transactionById", benchSettings.restTxsFile)(x => Base58.decode(x).get)
+    val allTxs: Vector[Array[Byte]] = load("transactionById", benchSettings.restTxsFile)(x => Base58.tryDecodeWithLimit(x).get)
   }
 
   @State(Scope.Benchmark)
@@ -93,7 +96,7 @@ object WavesEnvironmentBenchmark {
 
   @State(Scope.Benchmark)
   class AccountBalanceOfAssetSt extends AccountBalanceOfWavesSt {
-    val assets: Vector[Array[Byte]] = load("assets", benchSettings.assetsFile)(x => Base58.decode(x).get)
+    val assets: Vector[Array[Byte]] = load("assets", benchSettings.assetsFile)(x => Base58.tryDecodeWithLimit(x).get)
   }
 
   @State(Scope.Benchmark)
@@ -122,12 +125,14 @@ object WavesEnvironmentBenchmark {
     }
 
     val environment: Environment = {
-      val state = new LevelDBWriter(db, wavesSettings.blockchainSettings.functionalitySettings, 100000, 2000, 120 * 60 * 1000)
+      val portfolioChanges = Observer.empty(UncaughtExceptionReporter.LogExceptionsToStandardErr)
+      val state            = new LevelDBWriter(db, portfolioChanges, wavesSettings.blockchainSettings.functionalitySettings, 100000, 2000, 120 * 60 * 1000)
       new WavesEnvironment(
         AddressScheme.current.chainId,
-        Coeval.raiseError(new NotImplementedError("tx is not implemented")),
+        Coeval.raiseError(new NotImplementedError("`tx` is not implemented")),
         Coeval(state.height),
-        state
+        state,
+        Coeval.raiseError(new NotImplementedError("`this` is not implemented"))
       )
     }
 

@@ -3,23 +3,22 @@ package com.wavesplatform.http
 import akka.http.scaladsl.model.StatusCodes
 import com.typesafe.config.ConfigFactory
 import com.wavesplatform.RequestGen
+import com.wavesplatform.api.http._
+import com.wavesplatform.api.http.assets._
+import com.wavesplatform.common.utils.Base58
 import com.wavesplatform.settings.RestAPISettings
 import com.wavesplatform.state.Diff
 import com.wavesplatform.state.diffs.TransactionDiffer.TransactionValidationError
-import com.wavesplatform.utx.{UtxBatchOps, UtxPool}
-import io.netty.channel.group.ChannelGroup
-import org.scalacheck.Gen._
-import org.scalacheck.{Gen => G}
-import org.scalamock.scalatest.PathMockFactory
-import org.scalatest.prop.PropertyChecks
-import play.api.libs.json.{JsObject, JsValue, Json, Writes}
-import com.wavesplatform.api.http._
-import com.wavesplatform.api.http.assets._
-import com.wavesplatform.utils.Base58
 import com.wavesplatform.transaction.ValidationError.GenericError
 import com.wavesplatform.transaction.transfer._
-import com.wavesplatform.transaction.{Proofs, Transaction, ValidationError}
+import com.wavesplatform.transaction.{Asset, Proofs, Transaction}
+import com.wavesplatform.utx.UtxPool
 import com.wavesplatform.wallet.Wallet
+import io.netty.channel.group.{ChannelGroup, ChannelGroupFuture, ChannelMatcher}
+import org.scalacheck.{Gen => G}
+import org.scalamock.scalatest.PathMockFactory
+import org.scalatestplus.scalacheck.{ScalaCheckPropertyChecks => PropertyChecks}
+import play.api.libs.json.{JsObject, JsValue, Json, Writes}
 import shapeless.Coproduct
 
 class AssetsBroadcastRouteSpec extends RouteSpec("/assets/broadcast/") with RequestGen with PathMockFactory with PropertyChecks {
@@ -69,7 +68,7 @@ class AssetsBroadcastRouteSpec extends RouteSpec("/assets/broadcast/") with Requ
           posting(ir.copy(fee = q)) should produce(InsufficientFee())
         }
         forAll(nonPositiveLong) { q =>
-          posting(ir.copy(quantity = q)) should produce(NegativeAmount(s"$q of assets"))
+          posting(ir.copy(quantity = q)) should produce(NonPositiveAmount(s"$q of assets"))
         }
         forAll(invalidDecimals) { d =>
           posting(ir.copy(decimals = d)) should produce(TooBigArrayAllocation)
@@ -96,7 +95,7 @@ class AssetsBroadcastRouteSpec extends RouteSpec("/assets/broadcast/") with Requ
 
         // todo: invalid sender
         forAll(nonPositiveLong) { q =>
-          posting(rr.copy(quantity = q)) should produce(NegativeAmount(s"$q of assets"))
+          posting(rr.copy(quantity = q)) should produce(NonPositiveAmount(s"$q of assets"))
         }
         forAll(nonPositiveLong) { fee =>
           posting(rr.copy(fee = fee)) should produce(InsufficientFee())
@@ -127,7 +126,7 @@ class AssetsBroadcastRouteSpec extends RouteSpec("/assets/broadcast/") with Requ
         def posting[A: Writes](v: A): RouteTestResult = Post(routePath("transfer"), v) ~> route
 
         forAll(nonPositiveLong) { q =>
-          posting(tr.copy(amount = q)) should produce(NegativeAmount(s"$q of waves"))
+          posting(tr.copy(amount = q)) should produce(NonPositiveAmount(s"$q of ${tr.assetId.getOrElse("waves")}"))
         }
         forAll(invalidBase58) { pk =>
           posting(tr.copy(senderPublicKey = pk)) should produce(InvalidAddress)
@@ -144,9 +143,6 @@ class AssetsBroadcastRouteSpec extends RouteSpec("/assets/broadcast/") with Requ
         forAll(longAttachment) { a =>
           posting(tr.copy(attachment = Some(a))) should produce(CustomValidationError("invalid.attachment"))
         }
-        forAll(posNum[Long]) { quantity =>
-          posting(tr.copy(amount = quantity, fee = Long.MaxValue)) should produce(OverflowError)
-        }
         forAll(nonPositiveLong) { fee =>
           posting(tr.copy(fee = fee)) should produce(InsufficientFee())
         }
@@ -156,14 +152,14 @@ class AssetsBroadcastRouteSpec extends RouteSpec("/assets/broadcast/") with Requ
 
   "compatibility" - {
     val alwaysApproveUtx = stub[UtxPool]
-    val utxOps = new UtxBatchOps {
-      override def putIfNew(tx: Transaction): Either[ValidationError, (Boolean, Diff)] = alwaysApproveUtx.putIfNew(tx)
-    }
-    (alwaysApproveUtx.batched[Any] _).when(*).onCall((f: UtxBatchOps => Any) => f(utxOps)).anyNumberOfTimes()
     (alwaysApproveUtx.putIfNew _).when(*).onCall((_: Transaction) => Right((true, Diff.empty))).anyNumberOfTimes()
 
     val alwaysSendAllChannels = stub[ChannelGroup]
-    (alwaysSendAllChannels.writeAndFlush(_: Any)).when(*).onCall((_: Any) => null).anyNumberOfTimes()
+    (alwaysSendAllChannels
+      .writeAndFlush(_: Any, _: ChannelMatcher))
+      .when(*, *)
+      .onCall((_: Any, _: ChannelMatcher) => stub[ChannelGroupFuture])
+      .anyNumberOfTimes()
 
     val route = AssetsBroadcastApiRoute(settings, alwaysApproveUtx, alwaysSendAllChannels).route
 
@@ -174,12 +170,12 @@ class AssetsBroadcastRouteSpec extends RouteSpec("/assets/broadcast/") with Requ
     val transferRequest = createSignedTransferRequest(
       TransferTransactionV1
         .selfSigned(
-          assetId = None,
+          assetId = Asset.Waves,
           sender = senderPrivateKey,
           recipient = receiverPrivateKey.toAddress,
           amount = 1 * Waves,
           timestamp = System.currentTimeMillis(),
-          feeAssetId = None,
+          feeAssetId = Asset.Waves,
           feeAmount = Waves / 3,
           attachment = Array.emptyByteArray
         )
@@ -190,15 +186,14 @@ class AssetsBroadcastRouteSpec extends RouteSpec("/assets/broadcast/") with Requ
     val versionedTransferRequest = createSignedVersionedTransferRequest(
       TransferTransactionV2
         .create(
-          assetId = None,
+          assetId = Asset.Waves,
           sender = senderPrivateKey,
           recipient = receiverPrivateKey.toAddress,
           amount = 1 * Waves,
           timestamp = System.currentTimeMillis(),
-          feeAssetId = None,
+          feeAssetId = Asset.Waves,
           feeAmount = Waves / 3,
           attachment = Array.emptyByteArray,
-          version = 2,
           proofs = Proofs(Seq.empty)
         )
         .right
@@ -218,7 +213,7 @@ class AssetsBroadcastRouteSpec extends RouteSpec("/assets/broadcast/") with Requ
       }
 
       "returns a error if it is not a transfer request" in posting(issueReq.sample.get) ~> check {
-        status shouldNot be(StatusCodes.OK)
+        status shouldBe StatusCodes.BadRequest
       }
     }
 
@@ -255,7 +250,7 @@ class AssetsBroadcastRouteSpec extends RouteSpec("/assets/broadcast/") with Requ
       }
 
       "returns a error if it is not a transfer request" in posting(List(issueReq.sample.get)) ~> check {
-        status shouldNot be(StatusCodes.OK)
+        status shouldBe StatusCodes.BadRequest
       }
     }
 
@@ -265,11 +260,11 @@ class AssetsBroadcastRouteSpec extends RouteSpec("/assets/broadcast/") with Requ
     import tx._
     SignedTransferV1Request(
       Base58.encode(tx.sender.publicKey),
-      assetId.map(_.base58),
+      assetId.maybeBase58Repr,
       recipient.stringRepr,
       amount,
       fee,
-      feeAssetId.map(_.base58),
+      feeAssetId.maybeBase58Repr,
       timestamp,
       attachment.headOption.map(_ => Base58.encode(attachment)),
       signature.base58
@@ -280,13 +275,12 @@ class AssetsBroadcastRouteSpec extends RouteSpec("/assets/broadcast/") with Requ
     import tx._
     SignedTransferV2Request(
       Base58.encode(tx.sender.publicKey),
-      assetId.map(_.base58),
+      assetId.maybeBase58Repr,
       recipient.stringRepr,
       amount,
-      feeAssetId.map(_.base58),
+      feeAssetId.maybeBase58Repr,
       fee,
       timestamp,
-      version,
       attachment.headOption.map(_ => Base58.encode(attachment)),
       proofs.proofs.map(_.base58)
     )

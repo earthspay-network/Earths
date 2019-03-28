@@ -1,9 +1,9 @@
 package com.wavesplatform.account
 
-import com.wavesplatform.utils.base58Length
-import com.wavesplatform.utils.Base58
-import com.wavesplatform.transaction.ValidationError.InvalidAddress
+import com.wavesplatform.common.utils.Base58
 import com.wavesplatform.crypto._
+import com.wavesplatform.transaction.ValidationError.InvalidAddress
+import com.wavesplatform.utils.base58Length
 
 trait PublicKeyAccount {
   def publicKey: Array[Byte]
@@ -19,6 +19,7 @@ trait PublicKeyAccount {
 }
 
 object PublicKeyAccount {
+  val empty = apply(Array.emptyByteArray)
 
   val KeyStringLength: Int = base58Length(KeyLength)
 
@@ -35,6 +36,6 @@ object PublicKeyAccount {
   def fromBase58String(s: String): Either[InvalidAddress, PublicKeyAccount] =
     (for {
       _     <- Either.cond(s.length <= KeyStringLength, (), "Bad public key string length")
-      bytes <- Base58.decode(s).toEither.left.map(ex => s"Unable to decode base58: ${ex.getMessage}")
+      bytes <- Base58.tryDecodeWithLimit(s).toEither.left.map(ex => s"Unable to decode base58: ${ex.getMessage}")
     } yield PublicKeyAccount(bytes)).left.map(err => InvalidAddress(s"Invalid sender: $err"))
 }

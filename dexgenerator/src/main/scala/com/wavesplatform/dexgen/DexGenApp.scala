@@ -5,16 +5,17 @@ import java.util.concurrent.Executors
 import cats.implicits.showInterpolator
 import com.typesafe.config.ConfigFactory
 import com.wavesplatform.account.{AddressOrAlias, AddressScheme, PrivateKeyAccount}
-import com.wavesplatform.api.http.assets.{SignedIssueV1Request, SignedMassTransferRequest}
+import com.wavesplatform.api.http.assets.{SignedIssueV2Request, SignedMassTransferRequest}
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.dexgen.cli.ScoptImplicits
 import com.wavesplatform.dexgen.config.FicusImplicits
 import com.wavesplatform.dexgen.utils.{ApiRequests, GenOrderType}
 import com.wavesplatform.it.api.Transaction
 import com.wavesplatform.it.util.GlobalTimer
 import com.wavesplatform.network.client.NetworkSender
-import com.wavesplatform.state.ByteStr
-import com.wavesplatform.transaction.AssetId
-import com.wavesplatform.transaction.assets.IssueTransactionV1
+import com.wavesplatform.transaction.Asset
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
+import com.wavesplatform.transaction.assets.IssueTransactionV2
 import com.wavesplatform.transaction.transfer.MassTransferTransaction
 import com.wavesplatform.transaction.transfer.MassTransferTransaction.ParsedTransfer
 import com.wavesplatform.utils.LoggerFacade
@@ -67,35 +68,40 @@ object DexGenApp extends App with ScoptImplicits with FicusImplicits with Enumer
   }
 
   implicit val signedMassTransferRequestWrites: Writes[SignedMassTransferRequest] =
-    Json.writes[SignedMassTransferRequest].transform((jsobj: JsObject) => jsobj + ("type" -> JsNumber(MassTransferTransaction.typeId.toInt)))
+    Json
+      .writes[SignedMassTransferRequest]
+      .transform((jsobj: JsObject) => jsobj + ("version" -> JsNumber(1)) + ("type" -> JsNumber(MassTransferTransaction.typeId.toInt)))
 
   val defaultConfig = ConfigFactory.load().as[GeneratorSettings]("generator")
+  AddressScheme.current = new AddressScheme { override val chainId: Byte = defaultConfig.chainId.head.toByte }
 
-  def issueAssets(endpoint: String, richAddressSeed: String, n: Int)(implicit tag: String): Seq[AssetId] = {
+  def issueAssets(endpoint: String, richAddressSeed: String, n: Int)(implicit tag: String): Seq[Asset] = {
     val node = api.to(endpoint)
 
-    val assetsTx: Seq[IssueTransactionV1] = (1 to n).map { i =>
-      IssueTransactionV1
+    val now = System.currentTimeMillis()
+    val assetsTx: Seq[IssueTransactionV2] = (1 to n).map { i =>
+      IssueTransactionV2
         .selfSigned(
-          PrivateKeyAccount.fromSeed(richAddressSeed).right.get,
+          chainId = AddressScheme.current.chainId,
           name = s"asset$i".getBytes(),
           description = s"asset description - $i".getBytes(),
-          quantity = 99999999999999999L,
+          quantity = 999999999999999L,
           decimals = 2,
           reissuable = false,
           fee = 100000000,
-          timestamp = System.currentTimeMillis()
+          timestamp = now + i,
+          sender = PrivateKeyAccount.fromSeed(richAddressSeed).explicitGet(),
+          script = None
         )
-        .right
-        .get
+        .explicitGet()
     }
 
-    val tradingAssets: Seq[AssetId]                    = assetsTx.map(tx => tx.id())
-    val signedIssueRequests: Seq[SignedIssueV1Request] = assetsTx.map(tx => api.createSignedIssueRequest(tx))
+    val tradingAssets: Seq[Asset]                      = assetsTx.map(tx => IssuedAsset(tx.id()))
+    val signedIssueRequests: Seq[SignedIssueV2Request] = assetsTx.map(tx => api.createSignedIssueRequest(tx))
 
     val issued: Seq[Future[Transaction]] = signedIssueRequests
       .map { txReq =>
-        node.signedIssue(txReq).flatMap { tx =>
+        node.broadcastRequest(txReq).flatMap { tx =>
           node.waitForTransaction(tx.id)
         }
       }
@@ -105,7 +111,7 @@ object DexGenApp extends App with ScoptImplicits with FicusImplicits with Enumer
     tradingAssets
   }
 
-  def parsedTransfersList(endpoint: String, assetId: Option[ByteStr], transferAmount: Long, pk: PrivateKeyAccount, accounts: Seq[PrivateKeyAccount])(
+  def parsedTransfersList(endpoint: String, assetId: Asset, transferAmount: Long, pk: PrivateKeyAccount, accounts: Seq[PrivateKeyAccount])(
       implicit tag: String): List[ParsedTransfer] = {
     val assetsTransfers = accounts.map { accountPk =>
       ParsedTransfer(AddressOrAlias.fromString(accountPk.address).right.get, transferAmount)
@@ -113,7 +119,7 @@ object DexGenApp extends App with ScoptImplicits with FicusImplicits with Enumer
     assetsTransfers.toList
   }
 
-  def massTransfer(endpoint: String, richAccountSeed: String, accounts: Seq[PrivateKeyAccount], tradingAssets: Seq[Option[AssetId]])(
+  def massTransfer(endpoint: String, richAccountSeed: String, accounts: Seq[PrivateKeyAccount], tradingAssets: Seq[Asset])(
       implicit tag: String): Future[Seq[Transaction]] = {
     val node          = api.to(endpoint)
     val richAccountPk = PrivateKeyAccount.fromSeed(richAccountSeed).right.get
@@ -123,14 +129,13 @@ object DexGenApp extends App with ScoptImplicits with FicusImplicits with Enumer
         .balance(richAccountPk.address, assetId)
         .flatMap { balance =>
           val transferAmount =
-            if (assetId.isEmpty)
+            if (assetId == Waves)
               30000000000l
             else
               balance / accounts.size / 1000
           val assetsTransfers = parsedTransfersList(endpoint, assetId, transferAmount, richAccountPk, accounts)
           val tx = MassTransferTransaction
             .selfSigned(
-              version = MassTransferTransaction.version,
               assetId = assetId,
               sender = richAccountPk,
               transfers = assetsTransfers,
@@ -177,8 +182,8 @@ object DexGenApp extends App with ScoptImplicits with FicusImplicits with Enumer
       Thread.sleep(5000)
 
       val transfers = Seq(
-        massTransfer(endpoint, finalConfig.richAccounts.head, finalConfig.validAccounts, None +: tradingAssets.dropRight(2).map(Option(_))),
-        massTransfer(endpoint, finalConfig.richAccounts.head, finalConfig.fakeAccounts, None +: tradingAssets.takeRight(2).map(Option(_)))
+        massTransfer(endpoint, finalConfig.richAccounts.head, finalConfig.validAccounts, Waves +: tradingAssets.dropRight(2)),
+        massTransfer(endpoint, finalConfig.richAccounts.head, finalConfig.fakeAccounts, Waves +: tradingAssets.takeRight(2))
       )
 
       Await.ready(Future.sequence(transfers), 120.seconds)

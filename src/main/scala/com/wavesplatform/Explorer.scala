@@ -4,16 +4,25 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.util
 
+import com.google.common.primitives.Shorts
 import com.typesafe.config.ConfigFactory
 import com.wavesplatform.account.{Address, AddressScheme}
-import com.wavesplatform.database.{Keys, LevelDBWriter}
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.{Base58, Base64, EitherExt2}
+import com.wavesplatform.database.{DBExt, Keys, LevelDBWriter}
 import com.wavesplatform.db.openDB
 import com.wavesplatform.settings.{WavesSettings, loadConfig}
-import com.wavesplatform.state.{ByteStr, EitherExt2}
-import com.wavesplatform.utils.{Base58, Base64, ScorexLogging}
+import com.wavesplatform.state.{Height, TxNum}
+import com.wavesplatform.transaction.Asset.IssuedAsset
+import com.wavesplatform.transaction.{Transaction, TransactionParsers}
+import com.wavesplatform.utils.ScorexLogging
+import monix.execution.UncaughtExceptionReporter
+import monix.reactive.Observer
 import org.slf4j.bridge.SLF4JBridgeHandler
 
 import scala.collection.JavaConverters._
+import scala.collection.mutable
+import scala.collection.mutable.ListBuffer
 import scala.util.Try
 
 object Explorer extends ScorexLogging {
@@ -23,7 +32,7 @@ object Explorer extends ScorexLogging {
     "version",
     "height",
     "score",
-    "block-at-height",
+    "block-at-height", // not used now
     "height-of",
     "waves-balance-history",
     "waves-balance",
@@ -38,11 +47,11 @@ object Explorer extends ScorexLogging {
     "lease-status",
     "filled-volume-and-fee-history",
     "filled-volume-and-fee",
-    "transaction-info",
+    "transaction-info", // not used now
     "address-transaction-history",
     "address-transaction-ids-at-height",
     "changed-addresses",
-    "transaction-ids-at-height",
+    "transaction-ids-at-height", // not used now
     "address-id-of-alias",
     "last-address-id",
     "address-to-id",
@@ -61,13 +70,20 @@ object Explorer extends ScorexLogging {
     "addresses-for-waves",
     "addresses-for-asset-seq-nr",
     "addresses-for-asset",
-    "address-transaction-ids-seq-nr",
-    "address-transaction-ids",
+    "address-transaction-ids-seq-nr", // not used now
+    "address-transaction-ids", // not used now
     "alias-is-disabled",
     "carry-fee-history",
     "carry-fee",
     "asset-script-history",
-    "asset-script"
+    "asset-script",
+    "safe-rollback-height",
+    "changed-data-keys",
+    "block-header-at-height",
+    "nth-transaction-info-at-height",
+    "address-transaction-seq-nr",
+    "address-transaction-height-type-and-nums",
+    "transaction-height-and-nums-by-id",
   )
 
   def main(args: Array[String]): Unit = {
@@ -83,9 +99,11 @@ object Explorer extends ScorexLogging {
 
     log.info(s"Data directory: ${settings.dataDirectory}")
 
-    val db = openDB(settings.dataDirectory)
+    val portfolioChanges = Observer.empty(UncaughtExceptionReporter.LogExceptionsToStandardErr)
+    val db               = openDB(settings.dataDirectory)
     val reader = new LevelDBWriter(
       db,
+      portfolioChanges,
       settings.blockchainSettings.functionalitySettings,
       maxCacheSize = settings.maxCacheSize,
       maxRollbackDepth = settings.maxRollbackDepth,
@@ -100,20 +118,20 @@ object Explorer extends ScorexLogging {
 
       flag match {
         case "B" =>
-          val maybeBlockId = Base58.decode(args(2)).toOption.map(ByteStr.apply)
+          val maybeBlockId = Base58.tryDecodeWithLimit(args(2)).toOption.map(ByteStr.apply)
           if (maybeBlockId.isDefined) {
             val kBlockHeight     = Keys.heightOf(maybeBlockId.get)
             val blockHeightBytes = db.get(kBlockHeight.keyBytes)
             val maybeBlockHeight = kBlockHeight.parse(blockHeightBytes)
             maybeBlockHeight.foreach { h =>
-              val kBlock     = Keys.blockBytes(h)
+              val kBlock     = Keys.blockHeaderBytesAt(Height(h))
               val blockBytes = db.get(kBlock.keyBytes)
               log.info(s"BlockId=${maybeBlockId.get} at h=$h: ${Base64.encode(blockBytes)}")
             }
           } else log.error("No block ID was provided")
 
         case "O" =>
-          val orderId = Base58.decode(args(2)).toOption.map(ByteStr.apply)
+          val orderId = Base58.tryDecodeWithLimit(args(2)).toOption.map(ByteStr.apply)
           if (orderId.isDefined) {
             val kVolumeAndFee = Keys.filledVolumeAndFee(orderId.get)(blockchainHeight)
             val bytes1        = db.get(kVolumeAndFee.keyBytes)
@@ -173,7 +191,7 @@ object Explorer extends ScorexLogging {
           val secondaryId = args(3)
 
           val address   = Address.fromString(args(2)).explicitGet()
-          val asset     = ByteStr.decodeBase58(secondaryId).get
+          val asset     = IssuedAsset(ByteStr.decodeBase58(secondaryId).get)
           val ai        = Keys.addressId(address)
           val addressId = ai.parse(db.get(ai.keyBytes)).get
           log.info(s"Address ID = $addressId")
@@ -209,6 +227,97 @@ object Explorer extends ScorexLogging {
           log.info("key-space,entry-count,total-key-size,total-value-size")
           for ((prefix, stats) <- result.asScala) {
             log.info(s"${keys(prefix)},${stats.entryCount},${stats.totalKeySize},${stats.totalValueSize}")
+          }
+
+        case "TXBH" =>
+          val txs = new ListBuffer[(TxNum, Transaction)]
+
+          val h = Height(args(2).toInt)
+
+          val prefix = ByteBuffer
+            .allocate(6)
+            .putShort(Keys.TransactionInfoPrefix)
+            .putInt(h)
+            .array()
+
+          val iterator = db.iterator
+
+          try {
+            iterator.seek(prefix)
+            while (iterator.hasNext && iterator.peekNext().getKey.startsWith(prefix)) {
+              val entry = iterator.next()
+
+              val k = entry.getKey
+              println(k.toList.map(_.toInt & 0xff))
+              val v = entry.getValue
+
+              for {
+                idx <- Try(Shorts.fromByteArray(k.slice(6, 8)))
+                tx  <- TransactionParsers.parseBytes(v)
+              } txs.append((TxNum(idx), tx))
+            }
+          } finally iterator.close()
+
+          println(txs.length)
+          txs.foreach(println)
+
+        case "AP" =>
+          val address   = Address.fromString(args(2)).explicitGet()
+          val portfolio = reader.portfolio(address)
+          log.info(s"$address : ${portfolio.balance} WAVES, ${portfolio.lease}, ${portfolio.assets.size} assets")
+          portfolio.assets.toSeq.sortBy(_._1.toString) foreach {
+            case (assetId, balance) => log.info(s"$assetId : $balance")
+          }
+
+        case "APS" =>
+          val addrs = mutable.Set[Address]()
+
+          println(s"\nWAVES balances\n")
+          for {
+            seqNr     <- (1 to db.get(Keys.addressesForWavesSeqNr)).par
+            addressId <- db.get(Keys.addressesForWaves(seqNr)).par
+            history = db.get(Keys.wavesBalanceHistory(addressId))
+            actualHeight <- history.headOption
+            balance = db.get(Keys.wavesBalance(addressId)(actualHeight))
+            if balance > 0
+          } yield {
+            val addr = db.get(Keys.idToAddress(addressId))
+            println(s"$addr : $balance")
+            addrs += addr
+          }
+
+          val assets = mutable.ListBuffer[ByteStr]()
+          db.iterateOver(10: Short) { e => // iterate over Keys.assetInfoHistory
+            assets += ByteStr(e.getKey.drop(2))
+          }
+
+          println(s"\nAssets balances (${assets.size} assets)")
+          for {
+            assetId <- assets.sorted
+            asset = IssuedAsset(assetId)
+            seqNr <- {
+              println(s"\n$assetId:")
+              1 to db.get(Keys.addressesForAssetSeqNr(asset))
+            }
+            addressId    <- db.get(Keys.addressesForAsset(asset, seqNr))
+            actualHeight <- db.get(Keys.assetBalanceHistory(addressId, asset)).headOption
+            balance = db.get(Keys.assetBalance(addressId, asset)(actualHeight))
+            if balance > 0
+          } yield {
+            val addr = db.get(Keys.idToAddress(addressId))
+            println(s"$addr : $balance")
+            addrs += addr
+          }
+
+          println(s"\nAddress balances (${addrs.size} addresses)")
+          addrs.toSeq.sortBy(_.toString).foreach { addr =>
+            val p = reader.portfolio(addr)
+            println(s"\n$addr : ${p.balance} ${p.lease}:")
+            p.assets.toSeq.sortBy(_._1.id).foreach {
+              case (IssuedAsset(assetId), bal) =>
+                if (bal > 0)
+                  println(s"$assetId : $bal")
+            }
           }
       }
     } finally db.close()

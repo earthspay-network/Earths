@@ -5,7 +5,7 @@ import com.wavesplatform.lang.v1.evaluator.ctx.LazyVal
 import com.wavesplatform.state.diffs.TransactionDiffer.TransactionValidationError
 import play.api.libs.json._
 import com.wavesplatform.account.{Address, AddressOrAlias, Alias}
-import com.wavesplatform.lang.ExprEvaluator.Log
+import com.wavesplatform.lang.v1.evaluator.Log
 import com.wavesplatform.transaction.{Transaction, ValidationError}
 
 case class ApiErrorResponse(error: Int, message: String)
@@ -23,20 +23,21 @@ trait ApiError {
 }
 
 object ApiError {
-  def fromValidationError(e: ValidationError): ApiError = {
+  def fromValidationError(e: ValidationError): ApiError =
     e match {
-      case ValidationError.InvalidAddress(_)       => InvalidAddress
-      case ValidationError.NegativeAmount(x, of)   => NegativeAmount(s"$x of $of")
-      case ValidationError.NegativeMinFee(x, of)   => NegativeMinFee(s"$x per $of")
-      case ValidationError.InsufficientFee(x)      => InsufficientFee(x)
-      case ValidationError.InvalidName             => InvalidName
-      case ValidationError.InvalidSignature(_, _)  => InvalidSignature
-      case ValidationError.InvalidRequestSignature => InvalidSignature
-      case ValidationError.TooBigArray             => TooBigArrayAllocation
-      case ValidationError.OverflowError           => OverflowError
-      case ValidationError.ToSelf                  => ToSelfError
-      case ValidationError.MissingSenderPrivateKey => MissingSenderPrivateKey
-      case ValidationError.GenericError(ge)        => CustomValidationError(ge)
+      case ValidationError.InvalidAddress(_)        => InvalidAddress
+      case ValidationError.NegativeAmount(x, of)    => NegativeAmount(s"$x of $of")
+      case ValidationError.NonPositiveAmount(x, of) => NonPositiveAmount(s"$x of $of")
+      case ValidationError.NegativeMinFee(x, of)    => NegativeMinFee(s"$x per $of")
+      case ValidationError.InsufficientFee(x)       => InsufficientFee(x)
+      case ValidationError.InvalidName              => InvalidName
+      case ValidationError.InvalidSignature(_, _)   => InvalidSignature
+      case ValidationError.InvalidRequestSignature  => InvalidSignature
+      case ValidationError.TooBigArray              => TooBigArrayAllocation
+      case ValidationError.OverflowError            => OverflowError
+      case ValidationError.ToSelf                   => ToSelfError
+      case ValidationError.MissingSenderPrivateKey  => MissingSenderPrivateKey
+      case ValidationError.GenericError(ge)         => CustomValidationError(ge)
       case ValidationError.AlreadyInTheState(tx, txHeight) =>
         CustomValidationError(s"Transaction $tx is already in the state on a height of $txHeight")
       case ValidationError.AccountBalanceError(errs)  => CustomValidationError(errs.values.mkString(", "))
@@ -47,15 +48,15 @@ object ApiError {
       case TransactionValidationError(error, tx) =>
         error match {
           case ValidationError.Mistiming(errorMessage) => Mistiming(errorMessage)
-          case ValidationError.TransactionNotAllowedByScript(vars, scriptSrc, isTokenScript) =>
-            TransactionNotAllowedByScript(tx, vars, scriptSrc, isTokenScript)
-          case ValidationError.ScriptExecutionError(err, src, vars, isToken) =>
-            ScriptExecutionError(tx, err, src, vars, isToken)
+          case ValidationError.TransactionNotAllowedByScript(vars, isTokenScript) =>
+            if (isTokenScript) TransactionNotAllowedByAssetScript(tx, vars)
+            else TransactionNotAllowedByAccountScript(tx, vars)
+          case ValidationError.ScriptExecutionError(err, vars, isToken) =>
+            ScriptExecutionError(tx, err, vars, isToken)
           case _ => StateCheckFailed(tx, fromValidationError(error).message)
         }
       case error => CustomValidationError(error.toString)
     }
-  }
 
   implicit val lvWrites: Writes[LazyVal] = Writes { lv =>
     lv.value.value.attempt
@@ -252,29 +253,47 @@ case class ScriptCompilerError(errorMessage: String) extends ApiError {
   override val message: String  = errorMessage
 }
 
-case class ScriptExecutionError(tx: Transaction, error: String, scriptSrc: String, log: Log, isTokenScript: Boolean) extends ApiError {
+case class ScriptExecutionError(tx: Transaction, error: String, log: Log, isTokenScript: Boolean) extends ApiError {
   override val id: Int             = 306
   override val code: StatusCode    = StatusCodes.BadRequest
   override val message: String     = s"Error while executing ${if (isTokenScript) "token" else "account"}-script: $error"
-  override lazy val json: JsObject = ScriptErrorJson(id, tx, message, scriptSrc, log)
-
+  override lazy val json: JsObject = ScriptErrorJson(id, tx, message, log)
 }
 
-case class TransactionNotAllowedByScript(tx: Transaction, log: Log, scriptSrc: String, isTokenScript: Boolean) extends ApiError {
-
-  override val id: Int             = 307
+case class TransactionNotAllowedByAccountScript(tx: Transaction, log: Log) extends ApiError {
+  override val id: Int             = TransactionNotAllowedByAccountScript.ErrorCode
   override val code: StatusCode    = StatusCodes.BadRequest
-  override val message: String     = s"Transaction is not allowed by ${if (isTokenScript) "token" else "account"}-script"
-  override lazy val json: JsObject = ScriptErrorJson(id, tx, message, scriptSrc, log)
+  override val message: String     = s"Transaction is not allowed by account-script"
+  override lazy val json: JsObject = ScriptErrorJson(id, tx, message, log)
+}
+
+object TransactionNotAllowedByAccountScript {
+  val ErrorCode = 307
+}
+
+case class TransactionNotAllowedByAssetScript(tx: Transaction, log: Log) extends ApiError {
+  override val id: Int             = TransactionNotAllowedByAssetScript.ErrorCode
+  override val code: StatusCode    = StatusCodes.BadRequest
+  override val message: String     = s"Transaction is not allowed by token-script"
+  override lazy val json: JsObject = ScriptErrorJson(id, tx, message, log)
+}
+
+object TransactionNotAllowedByAssetScript {
+  val ErrorCode = 308
+}
+
+case class SignatureError(error: String) extends ApiError {
+  override val id: Int          = 309
+  override val code: StatusCode = StatusCodes.InternalServerError
+  override val message: String  = s"Signature error: $error"
 }
 
 object ScriptErrorJson {
-  def apply(errId: Int, tx: Transaction, message: String, scriptSrc: String, log: Log): JsObject =
+  def apply(errId: Int, tx: Transaction, message: String, log: Log): JsObject =
     Json.obj(
       "error"       -> errId,
       "message"     -> message,
       "transaction" -> tx.json(),
-      "script"      -> scriptSrc,
       "vars" -> Json.arr(log.map {
         case (k, Right(v))  => Json.obj("name" -> k, "value" -> JsString(v.toString))
         case (k, Left(err)) => Json.obj("name" -> k, "error" -> JsString(err))

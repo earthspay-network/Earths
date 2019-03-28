@@ -1,12 +1,13 @@
 package com.wavesplatform.matcher
 
 import com.google.common.base.Charsets.UTF_8
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.metrics._
-import com.wavesplatform.state.{Blockchain, ByteStr}
-import com.wavesplatform.transaction.AssetId
+import com.wavesplatform.state.Blockchain
+import com.wavesplatform.transaction.Asset
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
 import com.wavesplatform.transaction.assets.exchange.AssetPair
 import kamon.Kamon
-import scorex.utils.ByteArray
 
 class AssetPairBuilder(settings: MatcherSettings, blockchain: Blockchain) {
   import AssetPairBuilder._
@@ -23,18 +24,26 @@ class AssetPairBuilder(settings: MatcherSettings, blockchain: Blockchain) {
 
   private def isCorrectlyOrdered(pair: AssetPair): Boolean =
     (indices.get(pair.priceAssetStr), indices.get(pair.amountAssetStr)) match {
-      case (None, None)         => pair.priceAsset < pair.amountAsset
+      case (None, None)         => pair.priceAsset.compatId < pair.amountAsset.compatId
       case (Some(_), None)      => true
       case (None, Some(_))      => false
       case (Some(pi), Some(ai)) => pi < ai
     }
 
-  private def isNotBlacklisted(assetId: ByteStr): Boolean = blockchain.assetDescription(assetId).exists { d =>
+  private def isNotBlacklisted(asset: IssuedAsset): Boolean = blockchain.assetDescription(asset).exists { d =>
     settings.blacklistedNames.forall(_.findFirstIn(new String(d.name, UTF_8)).isEmpty)
   }
 
-  private def validateAssetId(assetId: Option[AssetId]): Either[String, Option[AssetId]] =
-    cond(assetId.forall(isNotBlacklisted) && !blacklistedAssetIds(AssetPair.assetIdStr(assetId)), assetId, errorMsg(AssetPair.assetIdStr(assetId)))
+  private def validateAssetId(assetId: Asset): Either[String, Asset] = {
+    val strName = assetId.maybeBase58Repr.getOrElse(AssetPair.WavesName)
+
+    assetId match {
+      case Waves => Right(Waves)
+      case asset @ IssuedAsset(_) =>
+        val ok = isNotBlacklisted(asset) && !blacklistedAssetIds(strName)
+        cond(ok, assetId, errorMsg(strName))
+    }
+  }
 
   def validateAssetPair(pair: AssetPair): Either[String, AssetPair] =
     validate.measure(for {
@@ -55,11 +64,5 @@ class AssetPairBuilder(settings: MatcherSettings, blockchain: Blockchain) {
 object AssetPairBuilder {
   private def errorMsg(assetId: String) = s"Invalid Asset ID: $assetId"
 
-  implicit val assetIdOrdering: Ordering[Option[ByteStr]] = (price: Option[ByteStr], amount: Option[ByteStr]) =>
-    (price, amount) match {
-      case (None, None)                           => 0
-      case (_, None)                              => 1
-      case (None, _)                              => -1
-      case (Some(ByteStr(b1)), Some(ByteStr(b2))) => ByteArray.compare(b1, b2)
-  }
+  val assetIdOrdering: Ordering[Option[ByteStr]] = Ordering.Option[ByteStr]
 }

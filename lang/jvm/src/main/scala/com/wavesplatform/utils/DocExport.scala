@@ -1,37 +1,37 @@
 import cats.kernel.Monoid
-import shapeless.{:+:, CNil}
-import com.wavesplatform.lang.{Global, ScriptVersion}
+import com.github.mustachejava._
+import com.wavesplatform.lang.utils.DirectiveSet
 import com.wavesplatform.lang.v1.CTX
 import com.wavesplatform.lang.v1.compiler.Types._
+import com.wavesplatform.lang.v1.evaluator.ctx._
 import com.wavesplatform.lang.v1.evaluator.ctx.impl.waves.WavesContext
 import com.wavesplatform.lang.v1.evaluator.ctx.impl.{CryptoContext, PureContext}
-import com.wavesplatform.lang.v1.evaluator.ctx._
-import com.wavesplatform.lang.v1.traits.domain.{Ord, Recipient, Tx}
+import com.wavesplatform.lang.v1.traits.domain.{Recipient, Tx}
 import com.wavesplatform.lang.v1.traits.{DataType, Environment}
-import com.wavesplatform.lang.v1.evaluator.ctx.impl._
+import com.wavesplatform.lang.{ContentType, Global, ScriptType, StdLibVersion}
+import com.wavesplatform.common.utils.EitherExt2
 
 import scala.collection.JavaConverters._
-import com.github.mustachejava._
 
 object DocExport {
   def main(args: Array[String]) {
     if (args.size != 4 || args(0) != "--gen-doc") {
       System.err.println("Expected args: --gen-doc <version> <template> <output>")
     } else {
-      val version = ScriptVersion.fromInt(args(1).toByte).get
+      val version = StdLibVersion(args(1).toInt)
       val wavesContext = WavesContext.build(
-        version,
+        DirectiveSet(version, ScriptType.Account, ContentType.DApp).explicitGet(),
         new Environment {
           override def height: Long                                                                                    = ???
-          override def networkByte: Byte                                                                               = 66
-          override def inputEntity: Tx :+: Ord :+: CNil                                                                = ???
+          override def chainId: Byte                                                                                   = 66
+          override def inputEntity: Environment.InputEntity                                                            = ???
           override def transactionById(id: Array[Byte]): Option[Tx]                                                    = ???
           override def transactionHeightById(id: Array[Byte]): Option[Long]                                            = ???
           override def data(addressOrAlias: Recipient, key: String, dataType: DataType): Option[Any]                   = ???
           override def accountBalanceOf(addressOrAlias: Recipient, assetId: Option[Array[Byte]]): Either[String, Long] = ???
           override def resolveAlias(name: String): Either[String, Recipient.Address]                                   = ???
-        },
-        isTokenContext = true
+          override def tthis: Recipient.Address                                                                        = ???
+        }
       )
 
       val cryptoContext = CryptoContext.build(Global)
@@ -97,10 +97,7 @@ object DocExport {
                 ((f.argsDoc zip f.signature.args) map { arg =>
                   VarDoc(arg._1._1, extType(arg._2._2), arg._1._2)
                 }).toList.asJava,
-                f match {
-                  case NativeFunction(_, cost, _, _, _, _) => cost.toString
-                  case _                                   => ""
-                }
+                f.costByLibVersion(version).toString
             ))
 
       case class TransactionDoc(name: String, fields: java.util.List[TransactionField])

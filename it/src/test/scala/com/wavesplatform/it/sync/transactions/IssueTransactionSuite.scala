@@ -7,13 +7,11 @@ import com.wavesplatform.it.sync._
 import org.scalatest.prop.TableDrivenPropertyChecks
 
 class IssueTransactionSuite extends BaseTransactionSuite with TableDrivenPropertyChecks {
-  val supportedVersions: List[Byte] = List(1, 2)
-
   test("asset issue changes issuer's asset balance; issuer's waves balance is decreased by fee") {
     for (v <- supportedVersions) {
       val assetName        = "myasset"
       val assetDescription = "my asset description"
-      val (balance1, eff1) = notMiner.accountBalances(firstAddress)
+      val (balance1, eff1) = miner.accountBalances(firstAddress)
 
       val issuedAssetId =
         sender
@@ -21,8 +19,8 @@ class IssueTransactionSuite extends BaseTransactionSuite with TableDrivenPropert
           .id
       nodes.waitForHeightAriseAndTxPresent(issuedAssetId)
 
-      notMiner.assertBalances(firstAddress, balance1 - issueFee, eff1 - issueFee)
-      notMiner.assertAssetBalance(firstAddress, issuedAssetId, someAssetAmount)
+      miner.assertBalances(firstAddress, balance1 - issueFee, eff1 - issueFee)
+      miner.assertAssetBalance(firstAddress, issuedAssetId, someAssetAmount)
     }
   }
 
@@ -30,7 +28,7 @@ class IssueTransactionSuite extends BaseTransactionSuite with TableDrivenPropert
     for (v <- supportedVersions) {
       val assetName        = "myasset1"
       val assetDescription = "my asset description 1"
-      val (balance1, eff1) = notMiner.accountBalances(firstAddress)
+      val (balance1, eff1) = miner.accountBalances(firstAddress)
 
       val issuedAssetId =
         sender
@@ -44,15 +42,15 @@ class IssueTransactionSuite extends BaseTransactionSuite with TableDrivenPropert
           .id
       nodes.waitForHeightAriseAndTxPresent(issuedAssetIdSameAsset)
 
-      notMiner.assertAssetBalance(firstAddress, issuedAssetId, someAssetAmount)
-      notMiner.assertBalances(firstAddress, balance1 - 2 * issueFee, eff1 - 2 * issueFee)
+      miner.assertAssetBalance(firstAddress, issuedAssetId, someAssetAmount)
+      miner.assertBalances(firstAddress, balance1 - 2 * issueFee, eff1 - 2 * issueFee)
     }
   }
 
   test("Not able to create asset when insufficient funds") {
     val assetName        = "myasset"
     val assetDescription = "my asset description"
-    val eff1             = notMiner.accountBalances(firstAddress)._2
+    val eff1             = miner.accountBalances(firstAddress)._2
     val bigAssetFee      = eff1 + 1.waves
 
     assertBadRequestAndMessage(sender.issue(firstAddress, assetName, assetDescription, someAssetAmount, 2, reissuable = false, bigAssetFee),
@@ -80,9 +78,9 @@ class IssueTransactionSuite extends BaseTransactionSuite with TableDrivenPropert
   val invalidAssetValue =
     Table(
       ("assetVal", "decimals", "message"),
-      (0l, 2, "negative amount"),
+      (0l, 2, "non-positive amount"),
       (1l, 9, "Too big sequences requested"),
-      (-1l, 1, "negative amount"),
+      (-1l, 1, "non-positive amount"),
       (1l, -1, "Too big sequences requested")
     )
 

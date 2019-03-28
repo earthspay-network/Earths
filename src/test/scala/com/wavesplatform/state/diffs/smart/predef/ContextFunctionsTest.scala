@@ -1,25 +1,23 @@
 package com.wavesplatform.state.diffs.smart.predef
 
 import com.wavesplatform.account.PrivateKeyAccount
-import com.wavesplatform.lang.Global
-import com.wavesplatform.lang.ScriptVersion.Versions.V1
+import com.wavesplatform.common.utils.{Base58, EitherExt2}
+import com.wavesplatform.lang.{Global, StdLibVersion, ContentType}
+import com.wavesplatform.lang.StdLibVersion.V1
 import com.wavesplatform.lang.Testing._
-import com.wavesplatform.lang.v1.compiler.CompilerV1
+import com.wavesplatform.lang.v1.compiler.ExpressionCompiler
 import com.wavesplatform.lang.v1.parser.Parser
 import com.wavesplatform.state._
 import com.wavesplatform.state.diffs.smart.smartEnabledFS
 import com.wavesplatform.state.diffs.{ENOUGH_AMT, assertDiffAndState}
 import com.wavesplatform.transaction.GenesisTransaction
 import com.wavesplatform.transaction.smart.SetScriptTransaction
-import com.wavesplatform.transaction.smart.script.v1.ScriptV1
-import com.wavesplatform.utils.{Base58, compilerContext}
+import com.wavesplatform.transaction.smart.script.v1.ExprScript
+import com.wavesplatform.utils.compilerContext
 import com.wavesplatform.{NoShrink, TransactionGen}
-import org.scalatest.prop.PropertyChecks
-import org.scalatest.{Matchers, PropSpec}
-import com.wavesplatform.transaction.smart.SetScriptTransaction
-import com.wavesplatform.transaction.smart.script.v1.ScriptV1
-import com.wavesplatform.transaction.GenesisTransaction
 import org.scalacheck.Gen
+import org.scalatest.{Matchers, PropSpec}
+import org.scalatestplus.scalacheck.{ScalaCheckPropertyChecks => PropertyChecks}
 import shapeless.Coproduct
 
 class ContextFunctionsTest extends PropSpec with PropertyChecks with Matchers with TransactionGen with NoShrink {
@@ -49,13 +47,13 @@ class ContextFunctionsTest extends PropSpec with PropertyChecks with Matchers wi
         case 2 => scriptWithWavesFunctions(dataTransaction, transfer)
         case 3 => scriptWithCryptoFunctions
       }
-      .map(x => Parser(x).get.value)
+      .map(x => Parser.parseExpr(x).get.value)
 
     typedScript = {
-      val compilerScript = CompilerV1(compilerContext(V1, isAssetScript = false), untypedScript).explicitGet()._1
-      ScriptV1(compilerScript).explicitGet()
+      val compilerScript = ExpressionCompiler(compilerContext(V1, ContentType.Expression, isAssetScript = false), untypedScript).explicitGet()._1
+      ExprScript(compilerScript).explicitGet()
     }
-    setScriptTransaction: SetScriptTransaction = SetScriptTransaction.selfSigned(1, recipient, Some(typedScript), 100000000L, ts).explicitGet()
+    setScriptTransaction: SetScriptTransaction = SetScriptTransaction.selfSigned(recipient, Some(typedScript), 100000000L, ts).explicitGet()
 
   } yield (Seq(genesis1, genesis2), setScriptTransaction, dataTransaction, transfer)
 
@@ -88,10 +86,20 @@ class ContextFunctionsTest extends PropSpec with PropertyChecks with Matchers wi
                |  let bin  = extract(getBinary(d, "${bin.key}"))
                |  let str  = extract(getString(d, "${str.key}"))
                |
+               |  let intV  = getIntegerValue(d, "${int.key}")
+               |  let boolV = getBooleanValue(d, "${bool.key}")
+               |  let binV  = getBinaryValue(d, "${bin.key}")
+               |  let strV  = getStringValue(d, "${str.key}")
+               |
                |  let okInt  = int  == ${int.value}
                |  let okBool = bool == ${bool.value}
                |  let okBin  = bin  == base58'${Base58.encode(bin.asInstanceOf[BinaryDataEntry].value.arr)}'
                |  let okStr  = str  == "${str.value}"
+               |
+               |  let okIntV  = int + 1  == ${int.value} + 1
+               |  let okBoolV = bool || true == ${bool.value} || true
+               |  let okBinV  = bin  == base58'${Base58.encode(bin.asInstanceOf[BinaryDataEntry].value.arr)}'
+               |  let okStrV  = str + ""  == "${str.value}"
                |
                |  let badInt  = isDefined(getInteger(d, "${bool.key}"))
                |  let badBool = isDefined(getBoolean(d, "${bin.key}"))
@@ -100,14 +108,15 @@ class ContextFunctionsTest extends PropSpec with PropertyChecks with Matchers wi
                |
                |  let noSuchKey = isDefined(getInteger(d, "\u00a0"))
                |
-               |  let positives = okInt && okBool && okBin && okStr
+               |  let positives = okInt && okBool && okBin && okStr && okIntV && okBoolV && okBinV && okStrV
                |  let negatives = badInt || badBool || badBin || badStr || noSuchKey
                |  positives && ! negatives
                | }
                | case _ => throw()
                |}
                |""".stripMargin,
-          Coproduct(tx)
+          Coproduct(tx),
+          StdLibVersion.V3
         )
         result shouldBe evaluated(true)
     }

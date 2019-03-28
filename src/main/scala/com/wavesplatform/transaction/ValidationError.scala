@@ -1,21 +1,21 @@
 package com.wavesplatform.transaction
 
-import com.google.common.base.Throwables
 import com.wavesplatform.account.{Address, Alias}
 import com.wavesplatform.block.{Block, MicroBlock}
-import com.wavesplatform.lang.ExprEvaluator.Log
-import com.wavesplatform.state.ByteStr
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.lang.v1.evaluator.Log
 import com.wavesplatform.transaction.assets.exchange.Order
 
 import scala.util.Either
 
-trait ValidationError
+trait ValidationError extends Product with Serializable
 
 object ValidationError {
   type Validation[T] = Either[ValidationError, T]
 
   case class InvalidAddress(reason: String)                    extends ValidationError
   case class NegativeAmount(amount: Long, of: String)          extends ValidationError
+  case class NonPositiveAmount(amount: Long, of: String)       extends ValidationError
   case class NegativeMinFee(minFee: Long, of: String)          extends ValidationError
   case class InsufficientFee(msg: String = "insufficient fee") extends ValidationError
   case object TooBigArray                                      extends ValidationError
@@ -40,7 +40,7 @@ object ValidationError {
   case class GenericError(err: String)                         extends ValidationError
 
   object GenericError {
-    def apply(ex: Throwable): GenericError = new GenericError(Throwables.getStackTraceAsString(ex))
+    def apply(ex: Throwable): GenericError = new GenericError(ex.getMessage)
   }
 
   case class InvalidSignature(s: Signed, details: Option[InvalidSignature] = None) extends ValidationError {
@@ -51,9 +51,9 @@ object ValidationError {
     def isTokenScript: Boolean
   }
 
-  case class ScriptExecutionError(error: String, scriptSrc: String, log: Log, isTokenScript: Boolean) extends ValidationError with HasScriptType
+  case class ScriptExecutionError(error: String, log: Log, isTokenScript: Boolean) extends ValidationError with HasScriptType
 
-  case class TransactionNotAllowedByScript(log: Log, scriptSrc: String, isTokenScript: Boolean) extends ValidationError with HasScriptType
+  case class TransactionNotAllowedByScript(log: Log, isTokenScript: Boolean) extends ValidationError with HasScriptType
 
   case class MicroBlockAppendError(err: String, microBlock: MicroBlock) extends ValidationError {
     override def toString: String = s"MicroBlockAppendError($err, ${microBlock.totalResBlockSig} ~> ${microBlock.prevResBlockSig.trim}])"

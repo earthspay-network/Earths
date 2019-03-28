@@ -2,9 +2,10 @@ package com.wavesplatform.state.diffs
 
 import cats._
 import cats.implicits._
+import com.wavesplatform.account.Address
 import com.wavesplatform.settings.FunctionalitySettings
 import com.wavesplatform.state._
-import com.wavesplatform.account.Address
+import com.wavesplatform.transaction.Asset.Waves
 import com.wavesplatform.transaction.ValidationError
 import com.wavesplatform.transaction.ValidationError.GenericError
 import com.wavesplatform.transaction.lease._
@@ -19,9 +20,10 @@ object LeaseTransactionsDiff {
       if (recipient == sender)
         Left(GenericError("Cannot lease to self"))
       else {
-        val ap = blockchain.portfolio(tx.sender)
-        if (ap.balance - ap.lease.out < tx.amount) {
-          Left(GenericError(s"Cannot lease more than own: Balance:${ap.balance}, already leased: ${ap.lease.out}"))
+        val lease   = blockchain.leaseBalance(tx.sender)
+        val balance = blockchain.balance(tx.sender, Waves)
+        if (balance - lease.out < tx.amount) {
+          Left(GenericError(s"Cannot lease more than own: Balance:${balance}, already leased: ${lease.out}"))
         } else {
           val portfolioDiff: Map[Address, Portfolio] = Map(
             sender    -> Portfolio(-tx.fee, LeaseBalance(0, tx.amount), Map.empty),

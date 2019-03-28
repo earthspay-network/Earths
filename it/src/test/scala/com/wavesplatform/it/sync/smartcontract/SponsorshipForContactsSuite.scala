@@ -13,7 +13,7 @@ class SponsorshipForContactsSuite extends BaseTransactionSuite with CancelAfterF
     sender.sponsorAsset(firstAddress, assetId, 100, sponsorFee, waitForTx = true)
     sender.transfer(firstAddress, secondAddress, someAssetAmount / 2, minFee, Some(assetId), None, waitForTx = true)
     val setScriptTransaction = SetScriptTransaction
-      .selfSigned(SetScriptTransaction.supportedVersions.head, acc0, Some(script), setScriptFee, System.currentTimeMillis())
+      .selfSigned(acc0, Some(script), setScriptFee, System.currentTimeMillis())
       .right
       .get
 
@@ -34,7 +34,6 @@ class SponsorshipForContactsSuite extends BaseTransactionSuite with CancelAfterF
     sender.accountBalances(secondAddress)._1 shouldBe secondAddressBalance - transferAmount
     sender.assetBalance(firstAddress, assetId).balance shouldBe firstAddressAssetBalance + 100
     sender.assetBalance(secondAddress, assetId).balance shouldBe secondAddressAssetBalance - 100
-
   }
 
 }

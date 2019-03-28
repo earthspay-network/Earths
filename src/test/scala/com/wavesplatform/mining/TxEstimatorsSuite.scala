@@ -1,14 +1,17 @@
 package com.wavesplatform.mining
 
 import com.wavesplatform.TransactionGen
+import com.wavesplatform.account.{Address, PrivateKeyAccount}
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.EitherExt2
+import com.wavesplatform.lang.StdLibVersion.V1
 import com.wavesplatform.lang.v1.compiler.Terms
-import com.wavesplatform.state.{AssetDescription, Blockchain, ByteStr, EitherExt2}
+import com.wavesplatform.state.{AssetDescription, Blockchain}
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
+import com.wavesplatform.transaction.smart.script.v1.ExprScript
+import com.wavesplatform.transaction.transfer.TransferTransactionV1
 import org.scalamock.scalatest.PathMockFactory
 import org.scalatest.{FreeSpec, Matchers}
-import com.wavesplatform.account.{Address, PrivateKeyAccount}
-import com.wavesplatform.lang.ScriptVersion.Versions.V1
-import com.wavesplatform.transaction.smart.script.v1.ScriptV1
-import com.wavesplatform.transaction.transfer.TransferTransactionV1
 
 class TxEstimatorsSuite extends FreeSpec with Matchers with PathMockFactory with TransactionGen {
   "scriptRunNumber" - {
@@ -32,7 +35,7 @@ class TxEstimatorsSuite extends FreeSpec with Matchers with PathMockFactory with
       "should not count transactions working with a regular tokens" in {
         val blockchain = stub[Blockchain]
         (blockchain.hasScript _).when(*).onCall((_: Address) => false).anyNumberOfTimes()
-        (blockchain.assetDescription _).when(*).onCall((_: ByteStr) => None).anyNumberOfTimes()
+        (blockchain.assetDescription _).when(*).onCall((_: IssuedAsset) => None).anyNumberOfTimes()
 
         TxEstimators.scriptRunNumber(blockchain, transferAssetsTx) shouldBe 0
       }
@@ -40,7 +43,7 @@ class TxEstimatorsSuite extends FreeSpec with Matchers with PathMockFactory with
       "should count transactions working with smart tokens" in {
         val blockchain = stub[Blockchain]
         (blockchain.hasScript _).when(*).onCall((_: Address) => false).anyNumberOfTimes()
-        (blockchain.assetDescription _).when(*).onCall((_: ByteStr) => Some(assetDescription)).anyNumberOfTimes()
+        (blockchain.assetDescription _).when(*).onCall((_: IssuedAsset) => Some(assetDescription)).anyNumberOfTimes()
 
         TxEstimators.scriptRunNumber(blockchain, transferAssetsTx) shouldBe 1
       }
@@ -49,23 +52,23 @@ class TxEstimatorsSuite extends FreeSpec with Matchers with PathMockFactory with
     "both - should double count transactions working with smart tokens from samrt account" in {
       val blockchain = stub[Blockchain]
       (blockchain.hasScript _).when(*).onCall((_: Address) => true).anyNumberOfTimes()
-      (blockchain.assetDescription _).when(*).onCall((_: ByteStr) => Some(assetDescription)).anyNumberOfTimes()
+      (blockchain.assetDescription _).when(*).onCall((_: IssuedAsset) => Some(assetDescription)).anyNumberOfTimes()
 
       TxEstimators.scriptRunNumber(blockchain, transferAssetsTx) shouldBe 2
     }
   }
 
   private val assetId = ByteStr("coin_id".getBytes())
-  private val script  = ScriptV1(V1, Terms.TRUE, checkSize = false).explicitGet()
+  private val script  = ExprScript(V1, Terms.TRUE, checkSize = false).explicitGet()
 
   private val transferWavesTx = TransferTransactionV1
     .selfSigned(
-      assetId = None,
+      assetId = Waves,
       sender = PrivateKeyAccount("sender".getBytes()),
       recipient = PrivateKeyAccount("recipient".getBytes()),
       amount = 1,
       timestamp = System.currentTimeMillis(),
-      feeAssetId = None,
+      feeAssetId = Waves,
       feeAmount = 100000,
       attachment = Array.emptyByteArray
     )
@@ -73,12 +76,12 @@ class TxEstimatorsSuite extends FreeSpec with Matchers with PathMockFactory with
 
   private val transferAssetsTx = TransferTransactionV1
     .selfSigned(
-      assetId = Some(assetId),
+      assetId = IssuedAsset(assetId),
       sender = PrivateKeyAccount("sender".getBytes()),
       recipient = PrivateKeyAccount("recipient".getBytes()),
       amount = 1,
       timestamp = System.currentTimeMillis(),
-      feeAssetId = None,
+      feeAssetId = Waves,
       feeAmount = 100000,
       attachment = Array.emptyByteArray
     )

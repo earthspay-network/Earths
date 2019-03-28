@@ -1,6 +1,7 @@
 package com.wavesplatform.it.sync.matcher.smartcontracts
 
 import com.typesafe.config.Config
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.it.api.SyncHttpApi._
 import com.wavesplatform.it.api.SyncMatcherHttpApi._
 import com.wavesplatform.it.matcher.MatcherSuiteBase
@@ -22,15 +23,15 @@ class ExtraFeeTestSuite extends MatcherSuiteBase {
 
   // issue one simple and two smart assets
   val asset0: String = aliceNode
-    .issue(aliceAcc.address, "Asset0", "Test", defaultAssetQuantity, 0, reissuable = false, issueFee, 2)
+    .issue(aliceAcc.address, "Asset0", "Test", defaultAssetQuantity, 0, reissuable = false, smartIssueFee, 2)
     .id
   val asset1: String = aliceNode
-    .issue(aliceAcc.address, "SmartAsset1", "Test", defaultAssetQuantity, 0, reissuable = false, issueFee, 2, trueScript)
+    .issue(aliceAcc.address, "SmartAsset1", "Test", defaultAssetQuantity, 0, reissuable = false, smartIssueFee, 2, trueScript)
     .id
   val asset2: String = bobNode
-    .issue(bobAcc.address, "SmartAsset2", "Test", defaultAssetQuantity, 0, reissuable = false, issueFee, 2, trueScript)
+    .issue(bobAcc.address, "SmartAsset2", "Test", defaultAssetQuantity, 0, reissuable = false, smartIssueFee, 2, trueScript)
     .id
-  Seq(asset1, asset2).foreach(matcherNode.waitForTransaction(_))
+  Seq(asset1, asset2).foreach(nodes.waitForTransaction(_))
 
   Seq(
     aliceNode.transfer(aliceAcc.address, bobAcc.address, defaultAssetQuantity / 2, 0.005.waves, Some(asset0), None, 2).id,
@@ -57,7 +58,7 @@ class ExtraFeeTestSuite extends MatcherSuiteBase {
                                                  price,
                                                  invalidFee,
                                                  2,
-                                                 expectedMessage = Some("Order matcherFee should be >= 700000"))
+                                                 expectedMessage = Some("Required 700000 WAVES as fee for this order, but given 699999 WAVES"))
 
         val counter = matcherNode.placeOrder(aliceAcc, oneSmartPair, SELL, amount, price, expectedFee, 2).message.id
         matcherNode.waitOrderStatus(oneSmartPair, counter, "Accepted")
@@ -88,14 +89,16 @@ class ExtraFeeTestSuite extends MatcherSuiteBase {
           val expectedFee = tradeFee + 2 * smartFee + smartFee // 2 x "smart asset" and 1 x "matcher script"
           val invalidFee  = expectedFee - 1
 
-          matcherNode.expectRejectedOrderPlacement(aliceAcc,
-                                                   bothSmartPair,
-                                                   SELL,
-                                                   amount,
-                                                   price,
-                                                   invalidFee,
-                                                   2,
-                                                   expectedMessage = Some("Order matcherFee should be >= 1500000"))
+          matcherNode.expectRejectedOrderPlacement(
+            aliceAcc,
+            bothSmartPair,
+            SELL,
+            amount,
+            price,
+            invalidFee,
+            2,
+            expectedMessage = Some("Required 1500000 WAVES as fee for this order, but given 1499999 WAVES")
+          )
 
           val counter = matcherNode.placeOrder(aliceAcc, bothSmartPair, SELL, amount, price, expectedFee, 2).message.id
           matcherNode.waitOrderStatus(bothSmartPair, counter, "Accepted")

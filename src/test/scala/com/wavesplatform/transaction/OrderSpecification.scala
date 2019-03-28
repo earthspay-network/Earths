@@ -1,47 +1,58 @@
 package com.wavesplatform.transaction
 
-import com.wavesplatform.OrderOps._
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.matcher.ValidationMatcher
-import com.wavesplatform.state.ByteStr
 import com.wavesplatform.state.diffs._
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
+import com.wavesplatform.transaction.assets.exchange.OrderOps._
 import com.wavesplatform.transaction.assets.exchange.{AssetPair, Order, OrderType, _}
 import com.wavesplatform.transaction.smart.Verifier
 import com.wavesplatform.{NTPTime, TransactionGen}
 import org.scalatest._
-import org.scalatest.prop.PropertyChecks
+import org.scalatestplus.scalacheck.{ScalaCheckPropertyChecks => PropertyChecks}
+
+import scala.util.Random
 
 class OrderSpecification extends PropSpec with PropertyChecks with Matchers with TransactionGen with ValidationMatcher with NTPTime {
 
+  private def checkFieldsEquality(left: Order, right: Order): Assertion = {
+
+    def defaultChecks: Assertion = {
+      left.bytes() shouldEqual right.bytes()
+      left.idStr() shouldBe right.idStr()
+      left.senderPublicKey.publicKey shouldBe right.senderPublicKey.publicKey
+      left.matcherPublicKey shouldBe right.matcherPublicKey
+      left.assetPair shouldBe right.assetPair
+      left.orderType shouldBe right.orderType
+      left.price shouldBe right.price
+      left.amount shouldBe right.amount
+      left.timestamp shouldBe right.timestamp
+      left.expiration shouldBe right.expiration
+      left.matcherFee shouldBe right.matcherFee
+      left.signature shouldBe right.signature
+    }
+
+    (left, right) match {
+      case (l: OrderV3, r: OrderV3) => defaultChecks; l.matcherFeeAssetId shouldBe r.matcherFeeAssetId
+      case _                        => defaultChecks
+    }
+  }
+
   property("Order transaction serialization roundtrip") {
+
     forAll(orderV1Gen) { order =>
       val recovered = OrderV1.parseBytes(order.bytes()).get
-      recovered.bytes() shouldEqual order.bytes()
-      recovered.idStr() shouldBe order.idStr()
-      recovered.senderPublicKey.publicKey shouldBe order.senderPublicKey.publicKey
-      recovered.matcherPublicKey shouldBe order.matcherPublicKey
-      recovered.assetPair shouldBe order.assetPair
-      recovered.orderType shouldBe order.orderType
-      recovered.price shouldBe order.price
-      recovered.amount shouldBe order.amount
-      recovered.timestamp shouldBe order.timestamp
-      recovered.expiration shouldBe order.expiration
-      recovered.matcherFee shouldBe order.matcherFee
-      recovered.signature shouldBe order.signature
+      checkFieldsEquality(recovered, order)
     }
+
     forAll(orderV2Gen) { order =>
       val recovered = OrderV2.parseBytes(order.bytes()).get
-      recovered.bytes() shouldEqual order.bytes()
-      recovered.idStr() shouldBe order.idStr()
-      recovered.senderPublicKey.publicKey shouldBe order.senderPublicKey.publicKey
-      recovered.matcherPublicKey shouldBe order.matcherPublicKey
-      recovered.assetPair shouldBe order.assetPair
-      recovered.orderType shouldBe order.orderType
-      recovered.price shouldBe order.price
-      recovered.amount shouldBe order.amount
-      recovered.timestamp shouldBe order.timestamp
-      recovered.expiration shouldBe order.expiration
-      recovered.matcherFee shouldBe order.matcherFee
-      recovered.signature shouldBe order.signature
+      checkFieldsEquality(recovered, order)
+    }
+
+    forAll(orderV3Gen) { order =>
+      val recovered = OrderV3.parseBytes(order.bytes()).get
+      checkFieldsEquality(recovered, order)
     }
   }
 
@@ -96,17 +107,20 @@ class OrderSpecification extends PropSpec with PropertyChecks with Matchers with
     val err = "proof doesn't validate as signature"
     forAll(orderGen, accountGen) {
       case (order, pka) =>
+        val rndAsset = Array[Byte](32)
+
+        Random.nextBytes(rndAsset)
+
         Verifier.verifyAsEllipticCurveSignature(order) shouldBe an[Right[_, _]]
         Verifier.verifyAsEllipticCurveSignature(order.updateSender(pka)) should produce(err)
         Verifier.verifyAsEllipticCurveSignature(order.updateMatcher(pka)) should produce(err)
         val assetPair = order.assetPair
         Verifier.verifyAsEllipticCurveSignature(
           order
-            .updatePair(assetPair.copy(
-              amountAsset = assetPair.amountAsset.map(Array(0: Byte) ++ _.arr).orElse(Some(Array(0: Byte))).map(ByteStr(_))))) should produce(err)
-        Verifier.verifyAsEllipticCurveSignature(order
-          .updatePair(assetPair.copy(priceAsset = assetPair.priceAsset.map(Array(0: Byte) ++ _.arr).orElse(Some(Array(0: Byte))).map(ByteStr(_))))) should produce(
-          err)
+            .updatePair(assetPair.copy(amountAsset = IssuedAsset(ByteStr(rndAsset))))) should produce(err)
+        Verifier.verifyAsEllipticCurveSignature(
+          order
+            .updatePair(assetPair.copy(priceAsset = IssuedAsset(ByteStr(rndAsset))))) should produce(err)
         Verifier.verifyAsEllipticCurveSignature(order.updateType(OrderType.reverse(order.orderType))) should produce(err)
         Verifier.verifyAsEllipticCurveSignature(order.updatePrice(order.price + 1)) should produce(err)
         Verifier.verifyAsEllipticCurveSignature(order.updateAmount(order.amount + 1)) should produce(err)
@@ -129,9 +143,13 @@ class OrderSpecification extends PropSpec with PropertyChecks with Matchers with
   }
 
   property("AssetPair test") {
-    forAll(assetIdGen, assetIdGen) { (assetA: Option[AssetId], assetB: Option[AssetId]) =>
+    forAll(assetIdGen, assetIdGen) { (assetA, assetB) =>
       whenever(assetA != assetB) {
-        val pair = AssetPair(assetA, assetB)
+        val assetAId: Asset = assetA.fold[Asset](Waves)(arr => IssuedAsset(arr))
+        val assetBId: Asset = assetB.fold[Asset](Waves)(arr => IssuedAsset(arr))
+
+        val pair = AssetPair(assetAId, assetBId)
+
         pair.isValid shouldBe valid
       }
     }

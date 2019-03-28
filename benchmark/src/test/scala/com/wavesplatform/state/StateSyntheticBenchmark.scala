@@ -2,19 +2,22 @@ package com.wavesplatform.state
 
 import java.util.concurrent.TimeUnit
 
-import com.wavesplatform.lang.v1.compiler.CompilerV1
+import com.wavesplatform.account.PrivateKeyAccount
+import com.wavesplatform.common.utils.EitherExt2
+import com.wavesplatform.lang.ContentType
+import com.wavesplatform.lang.StdLibVersion.V1
+import com.wavesplatform.lang.v1.compiler.ExpressionCompiler
 import com.wavesplatform.lang.v1.parser.Parser
 import com.wavesplatform.settings.FunctionalitySettings
 import com.wavesplatform.state.StateSyntheticBenchmark._
+import com.wavesplatform.transaction.Asset.Waves
+import com.wavesplatform.transaction.Transaction
+import com.wavesplatform.transaction.smart.SetScriptTransaction
+import com.wavesplatform.transaction.smart.script.v1.ExprScript
+import com.wavesplatform.transaction.transfer._
 import com.wavesplatform.utils.compilerContext
 import org.openjdk.jmh.annotations._
 import org.scalacheck.Gen
-import com.wavesplatform.account.PrivateKeyAccount
-import com.wavesplatform.lang.ScriptVersion.Versions.V1
-import com.wavesplatform.transaction.Transaction
-import com.wavesplatform.transaction.smart.SetScriptTransaction
-import com.wavesplatform.transaction.smart.script.v1.ScriptV1
-import com.wavesplatform.transaction.transfer._
 
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @BenchmarkMode(Array(Mode.AverageTime))
@@ -40,7 +43,7 @@ object StateSyntheticBenchmark {
       for {
         amount    <- Gen.choose(1, waves(1))
         recipient <- accountGen
-      } yield TransferTransactionV1.selfSigned(None, sender, recipient, amount, ts, None, 100000, Array.emptyByteArray).explicitGet()
+      } yield TransferTransactionV1.selfSigned(Waves, sender, recipient, amount, ts, Waves, 100000, Array.emptyByteArray).explicitGet()
   }
 
   @State(Scope.Benchmark)
@@ -57,13 +60,12 @@ object StateSyntheticBenchmark {
       } yield
         TransferTransactionV2
           .selfSigned(
-            TransferTransactionV2.supportedVersions.head,
-            None,
+            Waves,
             sender,
             recipient.toAddress,
             amount,
             ts,
-            None,
+            Waves,
             1000000,
             Array.emptyByteArray
           )
@@ -73,17 +75,16 @@ object StateSyntheticBenchmark {
     override def init(): Unit = {
       super.init()
 
-      val textScript    = "sigVerify(tx.bodyBytes,tx.proofs[0],tx.senderPk)"
-      val untypedScript = Parser(textScript).get.value
-      val typedScript   = CompilerV1(compilerContext(V1, isAssetScript = false), untypedScript).explicitGet()._1
+      val textScript    = "sigVerify(tx.bodyBytes,tx.proofs[0],tx.senderPublicKey)"
+      val untypedScript = Parser.parseExpr(textScript).get.value
+      val typedScript   = ExpressionCompiler(compilerContext(V1, ContentType.Expression, isAssetScript = false), untypedScript).explicitGet()._1
 
       val setScriptBlock = nextBlock(
         Seq(
           SetScriptTransaction
             .selfSigned(
-              SetScriptTransaction.supportedVersions.head,
               richAccount,
-              Some(ScriptV1(typedScript).explicitGet()),
+              Some(ExprScript(typedScript).explicitGet()),
               1000000,
               System.currentTimeMillis()
             )

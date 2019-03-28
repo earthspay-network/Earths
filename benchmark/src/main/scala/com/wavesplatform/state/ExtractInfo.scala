@@ -4,18 +4,20 @@ import java.io.{File, PrintWriter}
 import java.util.concurrent.ThreadLocalRandom
 
 import com.typesafe.config.ConfigFactory
+import com.wavesplatform.account.AddressScheme
+import com.wavesplatform.block.Block
 import com.wavesplatform.database.LevelDBWriter
 import com.wavesplatform.db.LevelDBFactory
 import com.wavesplatform.lang.v1.traits.DataType
 import com.wavesplatform.settings.{WavesSettings, loadConfig}
 import com.wavesplatform.state.bench.DataTestData
-import org.iq80.leveldb.{DB, Options}
-import scodec.bits.{BitVector, ByteVector}
-import com.wavesplatform.account.AddressScheme
-import com.wavesplatform.utils.ScorexLogging
-import com.wavesplatform.block.Block
 import com.wavesplatform.transaction.assets.IssueTransaction
 import com.wavesplatform.transaction.{Authorized, CreateAliasTransactionV1, DataTransaction, Transaction}
+import com.wavesplatform.utils.ScorexLogging
+import monix.execution.UncaughtExceptionReporter
+import monix.reactive.Observer
+import org.iq80.leveldb.{DB, Options}
+import scodec.bits.BitVector
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
@@ -49,7 +51,14 @@ object ExtractInfo extends App with ScorexLogging {
   }
 
   try {
-    val state = new LevelDBWriter(db, wavesSettings.blockchainSettings.functionalitySettings, 100000, 2000, 120 * 60 * 1000)
+    val state = new LevelDBWriter(
+      db,
+      Observer.empty(UncaughtExceptionReporter.LogExceptionsToStandardErr),
+      wavesSettings.blockchainSettings.functionalitySettings,
+      100000,
+      2000,
+      120 * 60 * 1000
+    )
 
     def nonEmptyBlockHeights(from: Int): Iterator[Integer] =
       for {
@@ -102,7 +111,7 @@ object ExtractInfo extends App with ScorexLogging {
       test <- b.transactionData
         .collect {
           case tx: DataTransaction =>
-            val addr = ByteVector(tx.sender.toAddress.bytes.arr)
+            val addr = tx.sender.toAddress.bytes
             tx.data.collectFirst {
               case x: IntegerDataEntry => DataTestData(addr, x.key, DataType.Long)
               case x: BooleanDataEntry => DataTestData(addr, x.key, DataType.Boolean)

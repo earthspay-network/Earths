@@ -1,23 +1,25 @@
 package com.wavesplatform.state.diffs.smart.predef
 
 import com.wavesplatform.account.{Address, Alias}
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.lang.Testing._
-import com.wavesplatform.lang.v1.compiler.Terms.CONST_BYTEVECTOR
+import com.wavesplatform.lang.v1.compiler.Terms.CONST_BYTESTR
 import com.wavesplatform.lang.v1.evaluator.ctx.impl._
-import com.wavesplatform.state._
 import com.wavesplatform.state.diffs._
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
 import com.wavesplatform.transaction.{DataTransaction, Proofs}
 import com.wavesplatform.{NoShrink, TransactionGen}
 import org.scalacheck.Gen
-import org.scalatest.prop.PropertyChecks
 import org.scalatest.{Assertions, Matchers, PropSpec}
+import org.scalatestplus.scalacheck.{ScalaCheckPropertyChecks => PropertyChecks}
 import shapeless.Coproduct
 
 class CommonFunctionsTest extends PropSpec with PropertyChecks with Matchers with TransactionGen with NoShrink {
 
   property("extract should transaction transfer assetId if exists") {
     forAll(transferV1Gen) {
-      case (transfer) =>
+      case transfer =>
         val result = runScript(
           """
             |match tx {
@@ -28,15 +30,15 @@ class CommonFunctionsTest extends PropSpec with PropertyChecks with Matchers wit
           Coproduct(transfer)
         )
         transfer.assetId match {
-          case Some(v) => result.explicitGet().asInstanceOf[CONST_BYTEVECTOR].bs.toArray sameElements v.arr
-          case None    => result should produce("extract() called on unit")
+          case IssuedAsset(v) => result.explicitGet().asInstanceOf[CONST_BYTESTR].bs.arr sameElements v.arr
+          case Waves          => result should produce("extract() called on unit")
         }
     }
   }
 
   property("isDefined should return true if transfer assetId exists") {
     forAll(transferV1Gen) {
-      case (transfer) =>
+      case transfer =>
         val result = runScript(
           """
                                           |match tx {
@@ -46,7 +48,7 @@ class CommonFunctionsTest extends PropSpec with PropertyChecks with Matchers wit
                                           |""".stripMargin,
           Coproduct(transfer)
         )
-        result shouldEqual evaluated(transfer.assetId.isDefined)
+        result shouldEqual evaluated(transfer.assetId != Waves)
     }
   }
 
@@ -68,9 +70,9 @@ class CommonFunctionsTest extends PropSpec with PropertyChecks with Matchers wit
   }
 
   property("getTransfer should extract MassTransfer transfers") {
-    import scodec.bits.ByteVector
-    forAll(massTransferGen.retryUntil(tg => tg.transfers.size > 0 && tg.transfers.map(_.address).forall(_.isInstanceOf[Address]))) {
-      case (massTransfer) =>
+
+    forAll(massTransferGen.retryUntil(tg => tg.transfers.nonEmpty && tg.transfers.map(_.address).forall(_.isInstanceOf[Address]))) {
+      case massTransfer =>
         val resultAmount = runScript(
           """
             |match tx {
@@ -94,7 +96,7 @@ class CommonFunctionsTest extends PropSpec with PropertyChecks with Matchers wit
                                                       |""".stripMargin,
           Coproduct(massTransfer)
         )
-        resultAddress shouldBe evaluated(ByteVector(massTransfer.transfers(0).address.bytes.arr))
+        resultAddress shouldBe evaluated(massTransfer.transfers(0).address.bytes)
         val resultLen = runScript(
           """
                                            |match tx {
@@ -173,7 +175,7 @@ class CommonFunctionsTest extends PropSpec with PropertyChecks with Matchers wit
 
   property("shadowing of inner pattern matching") {
     forAll(Gen.oneOf(transferV2Gen, issueGen)) {
-      case (transfer) =>
+      case transfer =>
         val result =
           runScript(
             s"""
@@ -193,11 +195,9 @@ class CommonFunctionsTest extends PropSpec with PropertyChecks with Matchers wit
     }
   }
 
-  property("shadowing of external variable") {
-    //TODO: script can be simplified after NODE-837 fix
-    try {
-      runScript(
-        s"""
+  property("shadowing of variable considered external") {
+    runScript(
+      s"""
            |match {
            |  let aaa = 1
            |  tx
@@ -206,12 +206,7 @@ class CommonFunctionsTest extends PropSpec with PropertyChecks with Matchers wit
            |     case other => throw()
            | }
            |""".stripMargin
-      )
-
-    } catch {
-      case ex: MatchError => Assertions.assert(ex.getMessage().contains("Compilation failed: Value 'tx' already defined in the scope"))
-      case _: Throwable   => Assertions.fail("Some unexpected error")
-    }
+    ) should produce("already defined")
   }
 
   property("data constructors") {
@@ -237,7 +232,7 @@ class CommonFunctionsTest extends PropSpec with PropertyChecks with Matchers wit
       )
       transferResult shouldBe evaluated(true)
 
-      val dataTx = DataTransaction.create(1: Byte, t.sender, List(entry), 100000L, t.timestamp, Proofs(Seq.empty)).explicitGet()
+      val dataTx = DataTransaction.create(t.sender, List(entry), 100000L, t.timestamp, Proofs(Seq.empty)).explicitGet()
       val dataResult = runScript(
         s"""
            |match tx {

@@ -1,6 +1,6 @@
 package com.wavesplatform.it.api
 
-import com.wavesplatform.state.ByteStr
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.transaction.assets.exchange.AssetPair
 import play.api.libs.json._
 
@@ -8,8 +8,8 @@ import scala.util.{Failure, Success}
 
 // USCE no longer contains references to non-serializable Request/Response objects
 // to work around https://github.com/scalatest/scalatest/issues/556
-case class UnexpectedStatusCodeException(requestUrl: String, statusCode: Int, responseBody: String)
-    extends Exception(s"Request: $requestUrl; Unexpected status code ($statusCode): $responseBody")
+case class UnexpectedStatusCodeException(requestMethod: String, requestUrl: String, statusCode: Int, responseBody: String)
+    extends Exception(s"Request: $requestMethod $requestUrl; Unexpected status code ($statusCode): $responseBody")
 
 case class Status(blockchainHeight: Int, stateHeight: Int, updatedTimestamp: Long, updatedDate: String)
 object Status {
@@ -99,6 +99,7 @@ object TransactionInfo {
 }
 
 case class OrderInfo(id: String,
+                     version: Option[Byte],
                      sender: String,
                      senderPublicKey: String,
                      matcherPublicKey: String,
@@ -109,7 +110,8 @@ case class OrderInfo(id: String,
                      timestamp: Long,
                      expiration: Long,
                      matcherFee: Long,
-                     signature: String)
+                     signature: String,
+                     proofs: Option[Seq[String]])
 object OrderInfo {
   implicit val transactionFormat: Format[OrderInfo] = Json.format
 }
@@ -120,12 +122,13 @@ object AssetPairResponse {
 }
 
 case class ExchangeTransaction(`type`: Int,
+                               version: Option[Byte],
                                id: String,
                                sender: String,
                                senderPublicKey: String,
                                fee: Long,
                                timestamp: Long,
-                               signature: Option[String],
+                               proofs: Option[Seq[String]],
                                order1: OrderInfo,
                                order2: OrderInfo,
                                amount: Long,
@@ -270,6 +273,11 @@ object BlacklistedPeer {
 case class State(address: String, miningBalance: Long, timestamp: Long)
 object State {
   implicit val StateFormat: Format[State] = Json.format
+}
+
+case class TransactionSerialize(bytes: Array[Int])
+object TransactionSerialize {
+  implicit val TransactionSerializeFormat: Format[TransactionSerialize] = Json.format
 }
 
 case class FeeInfo(feeAssetId: Option[String], feeAmount: Long)

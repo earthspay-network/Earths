@@ -1,11 +1,18 @@
 package com.wavesplatform
 
+import cats.kernel.Monoid
 import com.wavesplatform.account.{Address, AddressOrAlias, Alias}
 import com.wavesplatform.block.Block
+import com.wavesplatform.block.Block.BlockId
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.transaction.Transaction.Type
 import com.wavesplatform.transaction.ValidationError.{AliasDoesNotExist, GenericError}
 import com.wavesplatform.transaction._
 import com.wavesplatform.transaction.lease.{LeaseTransaction, LeaseTransactionV1}
+import com.wavesplatform.utils.Paged
+import play.api.libs.json._
+import supertagged.TaggedType
 
 import scala.reflect.ClassTag
 import scala.util.Try
@@ -58,13 +65,6 @@ package object state {
     }
   }
 
-  implicit class EitherExt2[A, B](ei: Either[A, B]) {
-    def explicitGet(): B = ei match {
-      case Left(value)  => throw new Exception(value.toString)
-      case Right(value) => value
-    }
-  }
-
   implicit class Cast[A](a: A) {
     def cast[B: ClassTag]: Option[B] = {
       a match {
@@ -103,15 +103,17 @@ package object state {
       case _                          => false
     }
 
-    def effectiveBalance(address: Address, atHeight: Int, confirmations: Int): Long = {
-      val bottomLimit = (atHeight - confirmations + 1).max(1).min(atHeight)
-      val balances    = blockchain.balanceSnapshots(address, bottomLimit, atHeight)
+    def effectiveBalance(address: Address, confirmations: Int, block: BlockId = blockchain.lastBlockId.getOrElse(ByteStr.empty)): Long = {
+      val blockHeight = blockchain.heightOf(block).getOrElse(blockchain.height)
+      val bottomLimit = (blockHeight - confirmations + 1).max(1).min(blockHeight)
+      val balances    = blockchain.balanceSnapshots(address, bottomLimit, block)
       if (balances.isEmpty) 0L else balances.view.map(_.effectiveBalance).min
     }
 
     def balance(address: Address, atHeight: Int, confirmations: Int): Long = {
       val bottomLimit = (atHeight - confirmations + 1).max(1).min(atHeight)
-      val balances    = blockchain.balanceSnapshots(address, bottomLimit, atHeight)
+      val block       = blockchain.blockAt(atHeight).getOrElse(throw new IllegalArgumentException(s"Invalid block height: $atHeight"))
+      val balances    = blockchain.balanceSnapshots(address, bottomLimit, block.uniqueId)
       if (balances.isEmpty) 0L else balances.view.map(_.regularBalance).min
     }
 
@@ -131,6 +133,54 @@ package object state {
       blockchain
         .heightOf(id)
         .getOrElse(throw new IllegalStateException(s"Can't find a block: $id"))
+
+    def wavesPortfolio(address: Address): Portfolio = Portfolio(
+      blockchain.balance(address),
+      blockchain.leaseBalance(address),
+      Map.empty
+    )
   }
 
+  object AssetDistribution extends TaggedType[Map[Address, Long]]
+  type AssetDistribution = AssetDistribution.Type
+
+  implicit val dstMonoid: Monoid[AssetDistribution] = new Monoid[AssetDistribution] {
+    override def empty: AssetDistribution = AssetDistribution(Map.empty[Address, Long])
+
+    override def combine(x: AssetDistribution, y: AssetDistribution): AssetDistribution = {
+      AssetDistribution(x ++ y)
+    }
+  }
+
+  implicit val dstWrites: Writes[AssetDistribution] = Writes { dst =>
+    Json
+      .toJson(dst.map {
+        case (addr, balance) => addr.stringRepr -> balance
+      })
+  }
+
+  object AssetDistributionPage extends TaggedType[Paged[Address, AssetDistribution]]
+  type AssetDistributionPage = AssetDistributionPage.Type
+
+  implicit val dstPageWrites: Writes[AssetDistributionPage] = Writes { page =>
+    JsObject(
+      Map(
+        "hasNext"  -> JsBoolean(page.hasNext),
+        "lastItem" -> Json.toJson(page.lastItem.map(_.stringRepr)),
+        "items"    -> Json.toJson(page.items)
+      )
+    )
+  }
+
+  object Height extends TaggedType[Int]
+  type Height = Height.Type
+
+  object TxNum extends TaggedType[Short]
+  type TxNum = TxNum.Type
+
+  object AddressId extends TaggedType[BigInt]
+  type AddressId = AddressId.Type
+
+  object TransactionId extends TaggedType[ByteStr]
+  type TransactionId = TransactionId.Type
 }

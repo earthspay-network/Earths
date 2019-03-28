@@ -4,7 +4,6 @@ import java.net.{InetSocketAddress, SocketAddress, URI}
 import java.util.concurrent.Callable
 
 import cats.Eq
-import com.wavesplatform.state.ByteStr
 import com.wavesplatform.utils.ScorexLogging
 import io.netty.channel.group.{ChannelGroup, ChannelGroupFuture, ChannelMatcher}
 import io.netty.channel.local.LocalAddress
@@ -16,11 +15,15 @@ import monix.eval.Coeval
 import monix.execution.Scheduler
 import monix.reactive.Observable
 import com.wavesplatform.block.Block
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.transaction.Transaction
+import kamon.Kamon
 
 import scala.concurrent.duration._
 
 package object network extends ScorexLogging {
+  private val broadcastTimeStats = Kamon.timer("network-broadcast-time")
+
   def inetSocketAddress(addr: String, defaultPort: Int): InetSocketAddress = {
     val uri = new URI(s"node://$addr")
     if (uri.getPort < 0) new InetSocketAddress(addr, defaultPort)
@@ -69,9 +72,14 @@ package object network extends ScorexLogging {
 
     def broadcast(message: AnyRef, except: Set[Channel]): ChannelGroupFuture = {
       logBroadcast(message, except)
-      allChannels.writeAndFlush(message, { (channel: Channel) =>
-        !except.contains(channel)
-      })
+      val st = broadcastTimeStats.refine("object", message.getClass.getSimpleName).start()
+      allChannels
+        .writeAndFlush(message, { (channel: Channel) =>
+          !except.contains(channel)
+        })
+        .addListener { _: ChannelGroupFuture =>
+          st.stop()
+        }
     }
 
     def broadcastMany(messages: Seq[AnyRef], except: Set[Channel] = Set.empty): Unit = {

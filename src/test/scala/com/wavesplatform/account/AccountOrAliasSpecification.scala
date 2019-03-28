@@ -1,9 +1,9 @@
 package com.wavesplatform.account
 
 import com.wavesplatform.TransactionGen
-import com.wavesplatform.state.EitherExt2
-import org.scalatest.prop.PropertyChecks
+import com.wavesplatform.common.utils.EitherExt2
 import org.scalatest.{Matchers, PropSpec}
+import org.scalatestplus.scalacheck.{ScalaCheckPropertyChecks => PropertyChecks}
 
 class AccountOrAliasSpecification extends PropSpec with PropertyChecks with Matchers with TransactionGen {
 

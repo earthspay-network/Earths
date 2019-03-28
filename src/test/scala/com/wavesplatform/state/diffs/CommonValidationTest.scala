@@ -1,22 +1,23 @@
 package com.wavesplatform.state.diffs
 
+import com.wavesplatform.account.AddressScheme
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.db.WithState
 import com.wavesplatform.features.{BlockchainFeature, BlockchainFeatures}
+import com.wavesplatform.lagonaki.mocks.TestBlock
 import com.wavesplatform.lang.v1.compiler.Terms._
 import com.wavesplatform.mining.MiningConstraint
 import com.wavesplatform.settings.{Constants, FunctionalitySettings, TestFunctionalitySettings}
-import com.wavesplatform.state.EitherExt2
-import com.wavesplatform.{NoShrink, TransactionGen}
-import org.scalacheck.Gen
-import org.scalatest.prop.PropertyChecks
-import org.scalatest.{Assertion, Matchers, PropSpec}
-import com.wavesplatform.account.AddressScheme
-import com.wavesplatform.lagonaki.mocks.TestBlock
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
 import com.wavesplatform.transaction.assets.{IssueTransactionV1, IssueTransactionV2, SponsorFeeTransaction}
 import com.wavesplatform.transaction.smart.SetScriptTransaction
-import com.wavesplatform.transaction.smart.script.v1.ScriptV1
+import com.wavesplatform.transaction.smart.script.v1.ExprScript
 import com.wavesplatform.transaction.transfer._
 import com.wavesplatform.transaction.{GenesisTransaction, Transaction, ValidationError}
+import com.wavesplatform.{NoShrink, TransactionGen}
+import org.scalacheck.Gen
+import org.scalatest.{Assertion, Matchers, PropSpec}
+import org.scalatestplus.scalacheck.{ScalaCheckPropertyChecks => PropertyChecks}
 
 class CommonValidationTest extends PropSpec with PropertyChecks with Matchers with TransactionGen with WithState with NoShrink {
 
@@ -89,7 +90,7 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
       recipientAcc <- accountGen
       ts = System.currentTimeMillis()
     } yield {
-      val script = ScriptV1(TRUE).explicitGet()
+      val script = ExprScript(TRUE).explicitGet()
 
       val genesisTx = GenesisTransaction.create(richAcc, ENOUGH_AMT, ts).explicitGet()
 
@@ -97,7 +98,6 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
         if (smartToken)
           IssueTransactionV2
             .selfSigned(
-              IssueTransactionV2.supportedVersions.head,
               AddressScheme.current.chainId,
               richAcc,
               "test".getBytes(),
@@ -116,17 +116,17 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
             .explicitGet()
 
       val transferWavesTx = TransferTransactionV1
-        .selfSigned(None, richAcc, recipientAcc, 10 * Constants.UnitsInWave, ts, None, 1 * Constants.UnitsInWave, Array.emptyByteArray)
+        .selfSigned(Waves, richAcc, recipientAcc, 10 * Constants.UnitsInWave, ts, Waves, 1 * Constants.UnitsInWave, Array.emptyByteArray)
         .explicitGet()
 
       val transferAssetTx = TransferTransactionV1
         .selfSigned(
-          Some(issueTx.id()),
+          IssuedAsset(issueTx.id()),
           richAcc,
           recipientAcc,
           100,
           ts,
-          None,
+          Waves,
           if (smartToken) { 1 * Constants.UnitsInWave + ScriptExtraFee } else { 1 * Constants.UnitsInWave },
           Array.emptyByteArray
         )
@@ -136,7 +136,7 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
         if (sponsorship)
           Seq(
             SponsorFeeTransaction
-              .selfSigned(1, richAcc, issueTx.id(), Some(10), if (smartToken) {
+              .selfSigned(richAcc, IssuedAsset(issueTx.id()), Some(10), if (smartToken) {
                 Constants.UnitsInWave + ScriptExtraFee
               } else {
                 Constants.UnitsInWave
@@ -150,7 +150,6 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
           Seq(
             SetScriptTransaction
               .selfSigned(
-                SetScriptTransaction.supportedVersions.head,
                 recipientAcc,
                 Some(script),
                 1 * Constants.UnitsInWave,
@@ -162,12 +161,12 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
 
       val transferBackTx = TransferTransactionV1
         .selfSigned(
-          Some(issueTx.id()),
+          IssuedAsset(issueTx.id()),
           recipientAcc,
           richAcc,
           1,
           ts,
-          if (feeInAssets) Some(issueTx.id()) else None,
+          if (feeInAssets) IssuedAsset(issueTx.id()) else Waves,
           feeAmount,
           Array.emptyByteArray
         )

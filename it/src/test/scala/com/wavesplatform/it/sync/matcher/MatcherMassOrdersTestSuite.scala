@@ -2,12 +2,13 @@ package com.wavesplatform.it.sync.matcher
 
 import com.typesafe.config.Config
 import com.wavesplatform.account.PrivateKeyAccount
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.it.api.SyncHttpApi._
 import com.wavesplatform.it.api.SyncMatcherHttpApi._
 import com.wavesplatform.it.matcher.MatcherSuiteBase
 import com.wavesplatform.it.sync._
 import com.wavesplatform.it.sync.matcher.config.MatcherDefaultConfig._
-import com.wavesplatform.state.ByteStr
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
 import com.wavesplatform.transaction.assets.exchange.{AssetPair, Order, OrderType}
 
 import scala.concurrent.duration._
@@ -21,15 +22,15 @@ class MatcherMassOrdersTestSuite extends MatcherSuiteBase {
   "Create orders with statuses FILL, PARTIAL, CANCELLED, ACTIVE" - {
     // Alice issues new assets
     val aliceAsset =
-      aliceNode.issue(aliceAcc.address, "AliceCoin", "AliceCoin for matcher's tests", someAssetAmount, 0, reissuable = false, issueFee, 2).id
+      aliceNode.issue(aliceAcc.address, "AliceCoin", "AliceCoin for matcher's tests", someAssetAmount, 0, reissuable = false, smartIssueFee, 2).id
 
     val aliceSecondAsset = aliceNode
-      .issue(aliceAcc.address, "AliceSecondCoin", "AliceSecondCoin for matcher's tests", someAssetAmount, 0, reissuable = false, issueFee, 2)
+      .issue(aliceAcc.address, "AliceSecondCoin", "AliceSecondCoin for matcher's tests", someAssetAmount, 0, reissuable = false, smartIssueFee, 2)
       .id
     Seq(aliceAsset, aliceSecondAsset).foreach(matcherNode.waitForTransaction(_))
 
-    val aliceWavesPair       = AssetPair(ByteStr.decodeBase58(aliceAsset).toOption, None)
-    val aliceSecondWavesPair = AssetPair(ByteStr.decodeBase58(aliceSecondAsset).toOption, None)
+    val aliceWavesPair       = AssetPair(IssuedAsset(ByteStr.decodeBase58(aliceAsset).get), Waves)
+    val aliceSecondWavesPair = AssetPair(IssuedAsset(ByteStr.decodeBase58(aliceSecondAsset).get), Waves)
 
     // Check balances on Alice's account
     aliceNode.assertAssetBalance(aliceAcc.address, aliceAsset, someAssetAmount)
@@ -67,6 +68,7 @@ class MatcherMassOrdersTestSuite extends MatcherSuiteBase {
       .message
       .id
 
+    matcherNode.cancelOrder(aliceAcc, aliceSecondWavesPair, aliceOrderToCancelId) // TODO: remove this line in DEX-160
     matcherNode.waitOrderStatus(aliceSecondWavesPair, aliceOrderToCancelId, "Cancelled", 2.minutes)
 
     //Bob orders should partially fill one Alice order and fill another

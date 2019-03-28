@@ -4,18 +4,22 @@ import java.nio.ByteBuffer
 
 import cats._
 import com.google.common.primitives.{Bytes, Ints, Longs}
-import com.wavesplatform.crypto
-import com.wavesplatform.settings.GenesisSettings
-import com.wavesplatform.state._
-import monix.eval.Coeval
-import play.api.libs.json.{JsObject, Json}
 import com.wavesplatform.account.{Address, PrivateKeyAccount, PublicKeyAccount}
 import com.wavesplatform.block.fields.FeaturesBlockField
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.consensus.nxt.{NxtConsensusBlockField, NxtLikeConsensusBlockData}
-import com.wavesplatform.utils.ScorexLogging
+import com.wavesplatform.crypto
+import com.wavesplatform.crypto._
+import com.wavesplatform.settings.GenesisSettings
+import com.wavesplatform.state._
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
 import com.wavesplatform.transaction.ValidationError.GenericError
 import com.wavesplatform.transaction._
-import com.wavesplatform.crypto._
+import com.wavesplatform.utils.ScorexLogging
+import monix.eval.Coeval
+import play.api.libs.json.{JsObject, Json}
+
 import scala.util.{Failure, Try}
 
 class BlockHeader(val timestamp: Long,
@@ -110,13 +114,13 @@ object BlockHeader extends ScorexLogging {
 
 }
 
-case class Block private (override val timestamp: Long,
-                          override val version: Byte,
-                          override val reference: ByteStr,
-                          override val signerData: SignerData,
-                          override val consensusData: NxtLikeConsensusBlockData,
-                          transactionData: Seq[Transaction],
-                          override val featureVotes: Set[Short])
+case class Block private[block] (override val timestamp: Long,
+                                 override val version: Byte,
+                                 override val reference: ByteStr,
+                                 override val signerData: SignerData,
+                                 override val consensusData: NxtLikeConsensusBlockData,
+                                 transactionData: Seq[Transaction],
+                                 override val featureVotes: Set[Short])
     extends BlockHeader(timestamp, version, reference, signerData, consensusData, transactionData.length, featureVotes)
     with Signed {
 
@@ -146,7 +150,7 @@ case class Block private (override val timestamp: Long,
 
   val json: Coeval[JsObject] = Coeval.evalOnce(
     BlockHeader.json(this, bytes().length) ++
-      Json.obj("fee" -> transactionData.filter(_.assetFee._1.isEmpty).map(_.assetFee._2).sum) ++
+      Json.obj("fee" -> transactionData.map(_.assetFee).collect { case (Waves, feeAmt) => feeAmt }.sum) ++
       transactionField.json())
 
   val bytesWithoutSignature: Coeval[Array[Byte]] = Coeval.evalOnce(bytes().dropRight(SignatureLength))
@@ -154,23 +158,23 @@ case class Block private (override val timestamp: Long,
   val blockScore: Coeval[BigInt] = Coeval.evalOnce((BigInt("18446744073709551616") / consensusData.baseTarget).ensuring(_ > 0))
 
   val feesPortfolio: Coeval[Portfolio] = Coeval.evalOnce(Monoid[Portfolio].combineAll({
-    val assetFees: Seq[(Option[AssetId], Long)] = transactionData.map(_.assetFee)
+    val assetFees: Seq[(Asset, Long)] = transactionData.map(_.assetFee)
     assetFees
       .map { case (maybeAssetId, vol) => maybeAssetId -> vol }
       .groupBy(a => a._1)
-      .mapValues((records: Seq[(Option[ByteStr], Long)]) => records.map(_._2).sum)
+      .mapValues((records: Seq[(Asset, Long)]) => records.map(_._2).sum)
   }.toList.map {
-    case (maybeAssetId, feeVolume) =>
-      maybeAssetId match {
-        case None          => Portfolio(feeVolume, LeaseBalance.empty, Map.empty)
-        case Some(assetId) => Portfolio(0L, LeaseBalance.empty, Map(assetId -> feeVolume))
+    case (assetId, feeVolume) =>
+      assetId match {
+        case Waves                  => Portfolio(feeVolume, LeaseBalance.empty, Map.empty)
+        case asset @ IssuedAsset(_) => Portfolio(0L, LeaseBalance.empty, Map(asset -> feeVolume))
       }
   }))
 
   val prevBlockFeePart: Coeval[Portfolio] =
     Coeval.evalOnce(Monoid[Portfolio].combineAll(transactionData.map(tx => tx.feeDiff().minus(tx.feeDiff().multiply(CurrentBlockFeePart)))))
 
-  protected val signatureValid: Coeval[Boolean] = Coeval.evalOnce {
+  override val signatureValid: Coeval[Boolean] = Coeval.evalOnce {
     import signerData.generator.publicKey
     !crypto.isWeakPublicKey(publicKey) && crypto.verify(signerData.signature.arr, bytesWithoutSignature(), publicKey)
   }
@@ -248,6 +252,18 @@ object Block extends ScorexLogging {
     (blockVersion == 3 && txsCount <= MaxTransactionsPerBlockVer3) || (blockVersion <= 2 || txsCount <= MaxTransactionsPerBlockVer1Ver2)
   }
 
+  def fromHeaderAndTransactions(h: BlockHeader, txs: Seq[Transaction]): Either[GenericError, Block] = {
+    build(
+      h.version,
+      h.timestamp,
+      h.reference,
+      h.consensusData,
+      txs,
+      h.signerData,
+      h.featureVotes
+    )
+  }
+
   def build(version: Byte,
             timestamp: Long,
             reference: ByteStr,
@@ -306,18 +322,27 @@ object Block extends ScorexLogging {
 
     val signature = genesisSettings.signature.fold(crypto.sign(genesisSigner, toSign))(_.arr)
 
-    if (crypto.verify(signature, toSign, genesisSigner.publicKey))
-      Right(
-        Block(
-          timestamp = timestamp,
-          version = GenesisBlockVersion,
-          reference = ByteStr(reference),
-          signerData = SignerData(genesisSigner, ByteStr(signature)),
-          consensusData = consensusGenesisData,
-          transactionData = transactionGenesisData,
-          featureVotes = Set.empty
-        ))
-    else Left(GenericError("Passed genesis signature is not valid"))
+    for {
+      // Verify signature
+      _ <- Either.cond(crypto.verify(signature, toSign, genesisSigner.publicKey), (), GenericError("Passed genesis signature is not valid"))
+
+      // Verify initial balance
+      genesisTransactionsSum = transactionGenesisData.map(_.amount).reduce(Math.addExact(_: Long, _: Long))
+      _ <- Either.cond(
+        genesisTransactionsSum == genesisSettings.initialBalance,
+        (),
+        GenericError(s"Initial balance ${genesisSettings.initialBalance} did not match the distributions sum $genesisTransactionsSum")
+      )
+    } yield
+      Block(
+        timestamp = timestamp,
+        version = GenesisBlockVersion,
+        reference = ByteStr(reference),
+        signerData = SignerData(genesisSigner, ByteStr(signature)),
+        consensusData = consensusGenesisData,
+        transactionData = transactionGenesisData,
+        featureVotes = Set.empty
+      )
   }
 
   val GenesisBlockVersion: Byte = 1

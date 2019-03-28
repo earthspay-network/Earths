@@ -19,10 +19,10 @@ import com.typesafe.config.ConfigFactory._
 import com.typesafe.config.{Config, ConfigRenderOptions}
 import com.wavesplatform.account.AddressScheme
 import com.wavesplatform.block.Block
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.it.api.AsyncHttpApi._
 import com.wavesplatform.it.util.GlobalTimer.{instance => timer}
 import com.wavesplatform.settings._
-import com.wavesplatform.state.EitherExt2
 import com.wavesplatform.utils.ScorexLogging
 import monix.eval.Coeval
 import net.ceedubs.ficus.Ficus._
@@ -224,14 +224,21 @@ class Docker(suiteConfig: Config = empty, tag: String = "", enableProfiling: Boo
 
       val javaOptions = Option(System.getenv("CONTAINER_JAVA_OPTS")).getOrElse("")
       val configOverrides: String = {
-        val ntpServer = Option(System.getenv("NTP_SERVER")).fold("")(x => s"-Dwaves.ntp-server=$x ")
+        val ntpServer    = Option(System.getenv("NTP_SERVER")).fold("")(x => s"-Dwaves.ntp-server=$x ")
+        val maxCacheSize = Option(System.getenv("MAX_CACHE_SIZE")).fold("")(x => s"-Dwaves.max-cache-size=$x ")
+        val kafkaServer = Option(System.getenv("KAFKA_SERVER")).fold("") { x =>
+          val prefix = "-Dwaves.matcher.events-queue"
+          val topic  = s"dex-$networkSeed-${System.currentTimeMillis() / 1000 / 60}"
+          s"$prefix.type=kafka $prefix.kafka.topic=$topic -Dakka.kafka.consumer.kafka-clients.bootstrap.servers=$x "
+        }
 
         var config = s"$javaOptions ${renderProperties(asProperties(overrides))} " +
-          s"-Dlogback.stdout.level=TRACE -Dlogback.file.level=OFF -Dwaves.network.declared-address=$ip:$networkPort $ntpServer"
+          s"-Dlogback.stdout.level=TRACE -Dlogback.file.level=OFF -Dwaves.network.declared-address=$ip:$networkPort $ntpServer $maxCacheSize $kafkaServer"
 
         if (enableProfiling) {
-          config += s"-agentpath:/usr/local/YourKit-JavaProfiler-2018.04/bin/linux-x86-64/libyjpagent.so=port=$ProfilerPort,listen=all," +
-            s"sampling,monitors,sessionname=WavesNode,dir=$ContainerRoot/profiler,logdir=$ContainerRoot "
+          // https://www.yourkit.com/docs/java/help/startup_options.jsp
+          config += s"-agentpath:/usr/local/YourKit-JavaProfiler-2019.1/bin/linux-x86-64/libyjpagent.so=port=$ProfilerPort,listen=all," +
+            s"sampling,monitors,sessionname=WavesNode,dir=$ContainerRoot/profiler,logdir=$ContainerRoot,onexit=snapshot "
         }
 
         val withAspectJ = Option(System.getenv("WITH_ASPECTJ")).fold(false)(_.toBoolean)
@@ -307,7 +314,6 @@ class Docker(suiteConfig: Config = empty, tag: String = "", enableProfiling: Boo
   def stopContainer(node: DockerNode): Unit = {
     val id = node.containerId
     log.info(s"Stopping container with id: $id")
-    takeProfileSnapshot(node)
     client.stopContainer(node.containerId, 10)
     saveProfile(node)
     saveLog(node)
@@ -322,7 +328,6 @@ class Docker(suiteConfig: Config = empty, tag: String = "", enableProfiling: Boo
   def killAndStartContainer(node: DockerNode): DockerNode = {
     val id = node.containerId
     log.info(s"Killing container with id: $id")
-    takeProfileSnapshot(node)
     client.killContainer(id, DockerClient.Signal.SIGINT)
     saveProfile(node)
     saveLog(node)
@@ -358,8 +363,8 @@ class Docker(suiteConfig: Config = empty, tag: String = "", enableProfiling: Boo
       log.info("Stopping containers")
 
       nodes.asScala.foreach { node =>
-        takeProfileSnapshot(node)
-        client.stopContainer(node.containerId, 0)
+        client.stopContainer(node.containerId, if (enableProfiling) 60 else 0)
+        log.debug(s"Container ${node.name} stopped with exit status: ${client.waitContainer(node.containerId).statusCode()}")
 
         saveProfile(node)
         saveLog(node)
@@ -410,28 +415,6 @@ class Docker(suiteConfig: Config = empty, tag: String = "", enableProfiling: Boo
     }
   }
 
-  private def takeProfileSnapshot(node: DockerNode): Unit = if (enableProfiling) {
-    val task = client.execCreate(
-      node.containerId,
-      Array(
-        "java",
-        "-jar",
-        ProfilerController.toString,
-        "127.0.0.1",
-        ProfilerPort.toString,
-        "capture-performance-snapshot"
-      ),
-      DockerClient.ExecCreateParam.attachStdout(),
-      DockerClient.ExecCreateParam.attachStderr()
-    )
-    Option(task.warnings()).toSeq.flatMap(_.asScala).foreach(log.warn(_))
-    client.execStart(task.id())
-    while (client.execInspect(task.id()).running()) {
-      log.trace(s"Snapshot of ${node.name} has not been took yet, wait...")
-      blocking(Thread.sleep(1000))
-    }
-  }
-
   private def saveProfile(node: DockerNode): Unit = if (enableProfiling) {
     try {
       val profilerDirStream = client.archiveContainer(node.containerId, ContainerRoot.resolve("profiler").toString)
@@ -470,7 +453,10 @@ class Docker(suiteConfig: Config = empty, tag: String = "", enableProfiling: Boo
 
   def disconnectFromNetwork(node: DockerNode): Unit = disconnectFromNetwork(node.containerId)
 
-  private def disconnectFromNetwork(containerId: String): Unit = client.disconnectFromNetwork(containerId, wavesNetwork.id())
+  private def disconnectFromNetwork(containerId: String): Unit = {
+    log.info(s"Trying to disconnect container ${containerId} from network ...")
+    client.disconnectFromNetwork(containerId, wavesNetwork.id())
+  }
 
   def restartContainer(node: DockerNode): DockerNode = {
     val id            = node.containerId
@@ -493,6 +479,7 @@ class Docker(suiteConfig: Config = empty, tag: String = "", enableProfiling: Boo
   }
 
   private def connectToNetwork(node: DockerNode): Unit = {
+    log.info(s"Trying to connect node ${node} to network ...")
     client.connectToNetwork(
       wavesNetwork.id(),
       NetworkConnection
@@ -532,7 +519,6 @@ class Docker(suiteConfig: Config = empty, tag: String = "", enableProfiling: Boo
 
   def runMigrationToolInsideContainer(node: DockerNode): DockerNode = {
     val id = node.containerId
-    takeProfileSnapshot(node)
     updateStartScript(node)
     stopContainer(node)
     saveProfile(node)
@@ -579,11 +565,10 @@ class Docker(suiteConfig: Config = empty, tag: String = "", enableProfiling: Boo
 }
 
 object Docker {
-  private val ContainerRoot      = Paths.get("/opt/waves")
-  private val ProfilerController = ContainerRoot.resolve("yjp-controller-api-redist.jar")
-  private val ProfilerPort       = 10001
-  private val jsonMapper         = new ObjectMapper
-  private val propsMapper        = new JavaPropsMapper
+  private val ContainerRoot = Paths.get("/opt/waves")
+  private val ProfilerPort  = 10001
+  private val jsonMapper    = new ObjectMapper
+  private val propsMapper   = new JavaPropsMapper
 
   val configTemplate = parseResources("template.conf")
   def genesisOverride = {

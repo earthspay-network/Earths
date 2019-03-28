@@ -2,13 +2,14 @@ package com.wavesplatform.it.sync
 
 import com.typesafe.config.{Config, ConfigFactory}
 import com.wavesplatform.account.AddressOrAlias
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.it.api.SyncHttpApi._
 import com.wavesplatform.it.transactions.NodesFromDocker
-import com.wavesplatform.it.{ReportingTestName, WaitForHeight2}
-import org.scalatest.{CancelAfterFailure, FreeSpec, Matchers}
 import com.wavesplatform.it.util._
-import com.wavesplatform.state._
+import com.wavesplatform.it.{ReportingTestName, WaitForHeight2}
+import com.wavesplatform.transaction.Asset.Waves
 import com.wavesplatform.transaction.transfer.TransferTransactionV2
+import org.scalatest.{CancelAfterFailure, FreeSpec, Matchers}
 
 class NodeRestartTestSuite extends FreeSpec with Matchers with WaitForHeight2 with CancelAfterFailure with ReportingTestName with NodesFromDocker {
   import NodeRestartTestSuite._
@@ -19,7 +20,7 @@ class NodeRestartTestSuite extends FreeSpec with Matchers with WaitForHeight2 wi
   private def nodeB = nodes(1)
 
   "node should grow up to 5 blocks together and sync" in {
-    nodes.waitForSameBlockHeadesAt(5)
+    nodes.waitForSameBlockHeadesAt(height = 5)
   }
 
   "create many addresses and check them after node restart" in {
@@ -33,13 +34,12 @@ class NodeRestartTestSuite extends FreeSpec with Matchers with WaitForHeight2 wi
 
   "after restarting all the nodes, the duplicate transaction cannot be put into the blockchain" in {
     val txJson = TransferTransactionV2
-      .selfSigned(2,
-                  None,
+      .selfSigned(Waves,
                   nodeB.privateKey,
                   AddressOrAlias.fromString(nodeA.address).explicitGet(),
                   1.waves,
                   System.currentTimeMillis(),
-                  None,
+                  Waves,
                   minFee,
                   Array[Byte]())
       .explicitGet()

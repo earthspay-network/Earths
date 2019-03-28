@@ -1,32 +1,37 @@
 package com.wavesplatform.transaction
 
+import cats.implicits._
 import com.google.common.primitives.{Bytes, Longs, Shorts}
+import com.wavesplatform.account.{PrivateKeyAccount, PublicKeyAccount}
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.crypto
 import com.wavesplatform.state._
+import com.wavesplatform.transaction.Asset.Waves
+import com.wavesplatform.transaction.description._
 import monix.eval.Coeval
 import play.api.libs.json._
-import com.wavesplatform.account.{PrivateKeyAccount, PublicKeyAccount}
-import com.wavesplatform.crypto._
-import scala.util.{Failure, Success, Try}
 
-case class DataTransaction private (version: Byte, sender: PublicKeyAccount, data: List[DataEntry[_]], fee: Long, timestamp: Long, proofs: Proofs)
+import scala.util.Try
+
+case class DataTransaction private (sender: PublicKeyAccount, data: List[DataEntry[_]], fee: Long, timestamp: Long, proofs: Proofs)
     extends ProvenTransaction
     with VersionedTransaction
     with FastHashId {
 
-  override val builder: TransactionParser        = DataTransaction
-  override val assetFee: (Option[AssetId], Long) = (None, fee)
-
-  override val bodyBytes: Coeval[Array[Byte]] = Coeval.evalOnce {
-    Bytes.concat(
-      Array(builder.typeId, version),
-      sender.publicKey,
-      Shorts.toByteArray(data.size.toShort),
-      data.flatMap(_.toBytes).toArray,
-      Longs.toByteArray(timestamp),
-      Longs.toByteArray(fee)
-    )
-  }
+  override val builder: TransactionParser = DataTransaction
+  override val assetFee: (Asset, Long)    = (Waves, fee)
+  override val bodyBytes: Coeval[Array[Byte]] =
+    Coeval.evalOnce {
+      Bytes.concat(
+        Array(builder.typeId, version),
+        sender.publicKey,
+        Shorts.toByteArray(data.size.toShort),
+        data.flatMap(_.toBytes).toArray,
+        Longs.toByteArray(timestamp),
+        Longs.toByteArray(fee)
+      )
+    }
 
   implicit val dataItemFormat: Format[DataEntry[_]] = DataEntry.Format
 
@@ -38,6 +43,8 @@ case class DataTransaction private (version: Byte, sender: PublicKeyAccount, dat
   }
 
   override val bytes: Coeval[Array[Byte]] = Coeval.evalOnce(Bytes.concat(Array(0: Byte), bodyBytes(), proofs.bytes()))
+
+  override def version: Byte = 1
 }
 
 object DataTransaction extends TransactionParserFor[DataTransaction] with TransactionParser.MultipleVersions {
@@ -48,65 +55,68 @@ object DataTransaction extends TransactionParserFor[DataTransaction] with Transa
   val MaxBytes      = 150 * 1024
   val MaxEntryCount = 100
 
-  override protected def parseTail(version: Byte, bytes: Array[Byte]): Try[TransactionT] =
-    Try {
-      val p0     = KeyLength
-      val sender = PublicKeyAccount(bytes.slice(0, p0))
+  override protected def parseTail(bytes: Array[Byte]): Try[TransactionT] = {
+    byteTailDescription
+      .deserializeFromByteArray(bytes)
+      .flatMap(
+        validateTxContent(_, Some(bytes.length)).foldToTry
+      )
+  }
 
-      val entryCount = Shorts.fromByteArray(bytes.drop(p0))
-      val (entries, p1) =
-        if (entryCount > 0) {
-          val parsed = List.iterate(DataEntry.parse(bytes, p0 + 2), entryCount) { case (e, p) => DataEntry.parse(bytes, p) }
-          (parsed.map(_._1), parsed.last._2)
-        } else (List.empty, p0 + 2)
-
-      val timestamp = Longs.fromByteArray(bytes.drop(p1))
-      val feeAmount = Longs.fromByteArray(bytes.drop(p1 + 8))
-      val txEi = for {
-        proofs <- Proofs.fromBytes(bytes.drop(p1 + 16))
-        tx     <- create(version, sender, entries, feeAmount, timestamp, proofs)
-      } yield tx
-      txEi.fold(left => Failure(new Exception(left.toString)), right => Success(right))
-    }.flatten
-
-  def create(version: Byte,
-             sender: PublicKeyAccount,
+  def create(sender: PublicKeyAccount,
              data: List[DataEntry[_]],
              feeAmount: Long,
              timestamp: Long,
              proofs: Proofs): Either[ValidationError, TransactionT] = {
-    if (!supportedVersions.contains(version)) {
-      Left(ValidationError.UnsupportedVersion(version))
-    } else if (data.lengthCompare(MaxEntryCount) > 0 || data.exists(!_.valid)) {
+
+    val tx = DataTransaction(sender, data, feeAmount, timestamp, proofs)
+    validateTxContent(tx)
+  }
+
+  private def validateTxContent(tx: DataTransaction, txByteCountOpt: Option[Int] = None): Either[ValidationError, TransactionT] = {
+    if (tx.data.lengthCompare(MaxEntryCount) > 0 || tx.data.exists(!_.valid)) {
       Left(ValidationError.TooBigArray)
-    } else if (data.exists(_.key.isEmpty)) {
+    } else if (tx.data.exists(_.key.isEmpty)) {
       Left(ValidationError.GenericError("Empty key found"))
-    } else if (data.map(_.key).distinct.lengthCompare(data.size) < 0) {
+    } else if (tx.data.map(_.key).distinct.lengthCompare(tx.data.size) < 0) {
       Left(ValidationError.GenericError("Duplicate keys found"))
-    } else if (feeAmount <= 0) {
+    } else if (tx.fee <= 0) {
       Left(ValidationError.InsufficientFee())
     } else {
-      val tx = DataTransaction(version, sender, data, feeAmount, timestamp, proofs)
-      Either.cond(tx.bytes().length <= MaxBytes, tx, ValidationError.TooBigArray)
+      Either.cond(txByteCountOpt.getOrElse(tx.bytes().length) <= MaxBytes, tx, ValidationError.TooBigArray)
     }
   }
 
-  def signed(version: Byte,
-             sender: PublicKeyAccount,
+  def signed(sender: PublicKeyAccount,
              data: List[DataEntry[_]],
              feeAmount: Long,
              timestamp: Long,
              signer: PrivateKeyAccount): Either[ValidationError, TransactionT] = {
-    create(version, sender, data, feeAmount, timestamp, Proofs.empty).right.map { unsigned =>
+    create(sender, data, feeAmount, timestamp, Proofs.empty).right.map { unsigned =>
       unsigned.copy(proofs = Proofs.create(Seq(ByteStr(crypto.sign(signer, unsigned.bodyBytes())))).explicitGet())
     }
   }
 
-  def selfSigned(version: Byte,
-                 sender: PrivateKeyAccount,
-                 data: List[DataEntry[_]],
-                 feeAmount: Long,
-                 timestamp: Long): Either[ValidationError, TransactionT] = {
-    signed(version, sender, data, feeAmount, timestamp, sender)
+  def selfSigned(sender: PrivateKeyAccount, data: List[DataEntry[_]], feeAmount: Long, timestamp: Long): Either[ValidationError, TransactionT] = {
+    signed(sender, data, feeAmount, timestamp, sender)
+  }
+
+  val byteTailDescription: ByteEntity[DataTransaction] = {
+    (
+      PublicKeyAccountBytes(tailIndex(1), "Sender's public key"),
+      ListDataEntryBytes(tailIndex(2)),
+      LongBytes(tailIndex(3), "Timestamp"),
+      LongBytes(tailIndex(4), "Fee"),
+      ProofsBytes(tailIndex(5))
+    ) mapN {
+      case (senderPublicKey, data, timestamp, fee, proofs) =>
+        DataTransaction(
+          sender = senderPublicKey,
+          data = data,
+          fee = fee,
+          timestamp = timestamp,
+          proofs = proofs
+        )
+    }
   }
 }

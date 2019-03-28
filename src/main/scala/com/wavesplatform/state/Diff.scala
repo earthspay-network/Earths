@@ -3,12 +3,15 @@ package com.wavesplatform.state
 import cats.implicits._
 import cats.kernel.Monoid
 import com.wavesplatform.account.{Address, Alias, PublicKeyAccount}
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.features.BlockchainFeatures
 import com.wavesplatform.features.FeatureProvider._
 import com.wavesplatform.settings.FunctionalitySettings
 import com.wavesplatform.state.diffs.CommonValidation
+import com.wavesplatform.transaction.Asset.IssuedAsset
+import com.wavesplatform.transaction.Transaction
 import com.wavesplatform.transaction.smart.script.Script
-import com.wavesplatform.transaction.{AssetId, Transaction}
+import play.api.libs.json._
 
 case class LeaseBalance(in: Long, out: Long)
 
@@ -21,6 +24,8 @@ object LeaseBalance {
     override def combine(x: LeaseBalance, y: LeaseBalance): LeaseBalance =
       LeaseBalance(safeSum(x.in, y.in), safeSum(x.out, y.out))
   }
+
+  implicit val leaseBalanceJsonFormat: Format[LeaseBalance] = Json.format
 }
 
 case class VolumeAndFee(volume: Long, fee: Long)
@@ -116,41 +121,50 @@ object Sponsorship {
 
 case class Diff(transactions: Map[ByteStr, (Int, Transaction, Set[Address])],
                 portfolios: Map[Address, Portfolio],
-                issuedAssets: Map[AssetId, AssetInfo],
+                issuedAssets: Map[IssuedAsset, AssetInfo],
                 aliases: Map[Alias, Address],
                 orderFills: Map[ByteStr, VolumeAndFee],
                 leaseState: Map[ByteStr, Boolean],
                 scripts: Map[Address, Option[Script]],
-                assetScripts: Map[AssetId, Option[Script]],
+                assetScripts: Map[IssuedAsset, Option[Script]],
                 accountData: Map[Address, AccountDataInfo],
-                sponsorship: Map[AssetId, Sponsorship]) {
-
-  lazy val accountTransactionIds: Map[Address, List[(Int, ByteStr)]] = {
-    val map: List[(Address, Set[(Int, Byte, Long, ByteStr)])] = transactions.toList
-      .flatMap { case (id, (h, tx, accs)) => accs.map(acc => acc -> Set((h, tx.builder.typeId, tx.timestamp, id))) }
-    val groupedByAcc = map.foldLeft(Map.empty[Address, Set[(Int, Byte, Long, ByteStr)]]) {
-      case (m, (acc, set)) =>
-        m.combine(Map(acc -> set))
-    }
-    groupedByAcc
-      .mapValues(l => l.toList.sortBy { case (h, _, t, _) => (-h, -t) }) // fresh head ([h=2, h=1, h=0])
-      .mapValues(_.map({ case (_, typ, _, id) => (typ.toInt, id) }))
-  }
-}
+                sponsorship: Map[IssuedAsset, Sponsorship])
 
 object Diff {
+
+  def stateOps(portfolios: Map[Address, Portfolio] = Map.empty,
+               assetInfos: Map[IssuedAsset, AssetInfo] = Map.empty,
+               aliases: Map[Alias, Address] = Map.empty,
+               orderFills: Map[ByteStr, VolumeAndFee] = Map.empty,
+               leaseState: Map[ByteStr, Boolean] = Map.empty,
+               scripts: Map[Address, Option[Script]] = Map.empty,
+               assetScripts: Map[IssuedAsset, Option[Script]] = Map.empty,
+               accountData: Map[Address, AccountDataInfo] = Map.empty,
+               sponsorship: Map[IssuedAsset, Sponsorship] = Map.empty): Diff =
+    Diff(
+      transactions = Map(),
+      portfolios = portfolios,
+      issuedAssets = assetInfos,
+      aliases = aliases,
+      orderFills = orderFills,
+      leaseState = leaseState,
+      scripts = scripts,
+      assetScripts = assetScripts,
+      accountData = accountData,
+      sponsorship = sponsorship
+    )
 
   def apply(height: Int,
             tx: Transaction,
             portfolios: Map[Address, Portfolio] = Map.empty,
-            assetInfos: Map[AssetId, AssetInfo] = Map.empty,
+            assetInfos: Map[IssuedAsset, AssetInfo] = Map.empty,
             aliases: Map[Alias, Address] = Map.empty,
             orderFills: Map[ByteStr, VolumeAndFee] = Map.empty,
             leaseState: Map[ByteStr, Boolean] = Map.empty,
             scripts: Map[Address, Option[Script]] = Map.empty,
-            assetScripts: Map[AssetId, Option[Script]] = Map.empty,
+            assetScripts: Map[IssuedAsset, Option[Script]] = Map.empty,
             accountData: Map[Address, AccountDataInfo] = Map.empty,
-            sponsorship: Map[AssetId, Sponsorship] = Map.empty): Diff =
+            sponsorship: Map[IssuedAsset, Sponsorship] = Map.empty): Diff =
     Diff(
       transactions = Map((tx.id(), (height, tx, portfolios.keys.toSet))),
       portfolios = portfolios,

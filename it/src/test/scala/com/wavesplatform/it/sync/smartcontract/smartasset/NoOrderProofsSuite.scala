@@ -1,14 +1,17 @@
 package com.wavesplatform.it.sync.smartcontract.smartasset
 
 import com.wavesplatform.account.AddressScheme
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.it.api.SyncHttpApi._
 import com.wavesplatform.it.sync.{someAssetAmount, _}
 import com.wavesplatform.it.transactions.BaseTransactionSuite
-import com.wavesplatform.state.ByteStr
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
 import com.wavesplatform.transaction.Proofs
 import com.wavesplatform.transaction.assets.BurnTransactionV2
 import com.wavesplatform.transaction.smart.script.ScriptCompiler
 import com.wavesplatform.transaction.transfer.TransferTransactionV2
+
 import scala.concurrent.duration._
 
 class NoOrderProofsSuite extends BaseTransactionSuite {
@@ -69,13 +72,12 @@ class NoOrderProofsSuite extends BaseTransactionSuite {
 
     val incorrectTrTx = TransferTransactionV2
       .create(
-        2,
-        Some(ByteStr.decodeBase58(assetWProofs).get),
+        IssuedAsset(ByteStr.decodeBase58(assetWProofs).get),
         pkByAddress(firstAddress),
         pkByAddress(thirdAddress),
         1,
         System.currentTimeMillis + 10.minutes.toMillis,
-        None,
+        Waves,
         smartMinFee,
         Array.emptyByteArray,
         Proofs(Seq(ByteStr("assetWProofs".getBytes())))
@@ -90,10 +92,9 @@ class NoOrderProofsSuite extends BaseTransactionSuite {
 
     val incorrectBrTx = BurnTransactionV2
       .create(
-        2,
         AddressScheme.current.chainId,
         pkByAddress(firstAddress),
-        ByteStr.decodeBase58(assetWProofs).get,
+        IssuedAsset(ByteStr.decodeBase58(assetWProofs).get),
         1,
         smartMinFee,
         System.currentTimeMillis + 10.minutes.toMillis,

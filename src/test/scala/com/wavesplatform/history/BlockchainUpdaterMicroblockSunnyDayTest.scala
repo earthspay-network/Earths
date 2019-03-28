@@ -1,16 +1,16 @@
 package com.wavesplatform.history
 
 import com.wavesplatform.TransactionGen
-import com.wavesplatform.features.BlockchainFeatures
-import com.wavesplatform.state._
-import com.wavesplatform.state.diffs._
-import org.scalacheck.Gen
-import org.scalatest._
-import org.scalatest.prop.PropertyChecks
 import com.wavesplatform.account.{Address, AddressOrAlias, PrivateKeyAccount}
+import com.wavesplatform.common.utils.EitherExt2
+import com.wavesplatform.crypto._
+import com.wavesplatform.features.BlockchainFeatures
+import com.wavesplatform.state.diffs._
 import com.wavesplatform.transaction._
 import com.wavesplatform.transaction.transfer._
-import com.wavesplatform.crypto._
+import org.scalacheck.Gen
+import org.scalatest._
+import org.scalatestplus.scalacheck.{ScalaCheckPropertyChecks => PropertyChecks}
 
 class BlockchainUpdaterMicroblockSunnyDayTest
     extends PropSpec
@@ -71,9 +71,9 @@ class BlockchainUpdaterMicroblockSunnyDayTest
         domain.blockchainUpdater.processMicroBlock(microBlocks(1)).explicitGet()
         domain.blockchainUpdater.processMicroBlock(microBlocks(2)) should produce("unavailable funds")
 
-        effBalance(genesis.recipient, domain) > 0 shouldBe true
-        effBalance(masterToAlice.recipient, domain) > 0 shouldBe true
-        effBalance(aliceToBob.recipient, domain) > 0 shouldBe true
+        effBalance(genesis.recipient, domain) should be > 0L
+        effBalance(masterToAlice.recipient, domain) should be > 0L
+        effBalance(aliceToBob.recipient, domain) should be > 0L
     }
   }
 

@@ -7,21 +7,24 @@ import akka.http.scaladsl.marshalling.ToResponseMarshallable
 import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.server.Route
 import cats.implicits._
+import cats.kernel.Monoid
 import com.typesafe.config.{ConfigObject, ConfigRenderOptions}
 import com.wavesplatform.account.Address
 import com.wavesplatform.api.http._
 import com.wavesplatform.block.Block
 import com.wavesplatform.block.Block.BlockId
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.Base58
 import com.wavesplatform.crypto
 import com.wavesplatform.mining.{Miner, MinerDebugInfo}
 import com.wavesplatform.network.{LocalScoreChanged, PeerDatabase, PeerInfo, _}
 import com.wavesplatform.settings.WavesSettings
 import com.wavesplatform.state.diffs.TransactionDiffer
-import com.wavesplatform.state.{Blockchain, ByteStr, LeaseBalance, NG, Portfolio}
+import com.wavesplatform.state.{Blockchain, LeaseBalance, NG}
 import com.wavesplatform.transaction.ValidationError.InvalidRequestSignature
 import com.wavesplatform.transaction._
 import com.wavesplatform.transaction.smart.Verifier
-import com.wavesplatform.utils.{Base58, ScorexLogging, Time}
+import com.wavesplatform.utils.{ScorexLogging, Time}
 import com.wavesplatform.utx.UtxPool
 import com.wavesplatform.wallet.Wallet
 import io.netty.channel.Channel
@@ -32,6 +35,7 @@ import monix.eval.{Coeval, Task}
 import play.api.libs.json._
 
 import scala.concurrent.Future
+import scala.concurrent.duration._
 import scala.util.control.NonFatal
 import scala.util.{Failure, Success}
 
@@ -132,11 +136,12 @@ case class DebugApiRoute(ws: WavesSettings,
     ))
   @ApiResponses(Array(new ApiResponse(code = 200, message = "Json portfolio")))
   def portfolios: Route = path("portfolios" / Segment) { rawAddress =>
-    (get & withAuth & parameter('considerUnspent.as[Boolean])) { considerUnspent =>
+    (get & withAuth & parameter('considerUnspent.as[Boolean].?)) { considerUnspent =>
       Address.fromString(rawAddress) match {
         case Left(_) => complete(InvalidAddress)
         case Right(address) =>
-          val portfolio = if (considerUnspent) utxStorage.portfolio(address) else ng.portfolio(address)
+          val base      = ng.portfolio(address)
+          val portfolio = if (considerUnspent.getOrElse(true)) Monoid.combine(base, utxStorage.pessimisticPortfolio(address)) else base
           complete(Json.toJson(portfolio))
       }
     }
@@ -146,7 +151,7 @@ case class DebugApiRoute(ws: WavesSettings,
   @ApiOperation(value = "State", notes = "Get current state", httpMethod = "GET")
   @ApiResponses(Array(new ApiResponse(code = 200, message = "Json state")))
   def state: Route = (path("state") & get & withAuth) {
-    complete(ng.wavesDistribution(ng.height).map { case (a, b) => a.stringRepr -> b })
+    complete(ng.wavesDistribution(ng.height).map(_.map { case (a, b) => a.stringRepr -> b }))
   }
 
   @Path("/stateWaves/{height}")
@@ -156,7 +161,7 @@ case class DebugApiRoute(ws: WavesSettings,
       new ApiImplicitParam(name = "height", value = "height", required = true, dataType = "integer", paramType = "path")
     ))
   def stateWaves: Route = (path("stateWaves" / IntNumber) & get & withAuth) { height =>
-    complete(ng.wavesDistribution(height).map { case (a, b) => a.stringRepr -> b })
+    complete(ng.wavesDistribution(height).map(_.map { case (a, b) => a.stringRepr -> b }))
   }
 
   private def rollbackToBlock(blockId: ByteStr, returnTransactionsToUtx: Boolean): Future[ToResponseMarshallable] = {
@@ -166,9 +171,7 @@ case class DebugApiRoute(ws: WavesSettings,
       case Right(blocks) =>
         allChannels.broadcast(LocalScoreChanged(ng.score))
         if (returnTransactionsToUtx) {
-          utxStorage.batched { ops =>
-            blocks.flatMap(_.transactionData).foreach(ops.putIfNew)
-          }
+          blocks.view.flatMap(_.transactionData).foreach(utxStorage.putIfNew)
         }
         miner.scheduleMining()
         Json.obj("BlockId" -> blockId.toString): ToResponseMarshallable
@@ -193,7 +196,7 @@ case class DebugApiRoute(ws: WavesSettings,
     Array(
       new ApiResponse(code = 200, message = "200 if success, 404 if there are no block at this height")
     ))
-  def rollback: Route = (path("rollback") & post & withAuth) {
+  def rollback: Route = (path("rollback") & post & withAuth & withRequestTimeout(15.minutes)) {
     json[RollbackParams] { params =>
       ng.blockAt(params.rollbackTo) match {
         case Some(block) =>
@@ -229,14 +232,23 @@ case class DebugApiRoute(ws: WavesSettings,
       new ApiResponse(code = 200, message = "Json state")
     ))
   def minerInfo: Route = (path("minerInfo") & get & withAuth) {
-    complete(miner.collectNextBlockGenerationTimes.map {
-      case (a, t) =>
-        AccountMiningInfo(
-          a.stringRepr,
-          ng.effectiveBalance(a, ng.height, ws.blockchainSettings.functionalitySettings.generatingBalanceDepth(ng.height)),
-          t
-        )
-    })
+    complete(
+      wallet.privateKeyAccounts
+        .filterNot(account => ng.hasScript(account.toAddress))
+        .map { account =>
+          (account.toAddress, miner.getNextBlockGenerationOffset(account))
+        }
+        .collect {
+          case (address, Right(offset)) =>
+            AccountMiningInfo(
+              address.stringRepr,
+              ng.effectiveBalance(address,
+                                  ws.blockchainSettings.functionalitySettings.generatingBalanceDepth(ng.height),
+                                  ng.microblockIds.lastOption.getOrElse(ByteStr.empty)),
+              System.currentTimeMillis() + offset.toMillis
+            )
+        }
+    )
   }
 
   @Path("/historyInfo")
@@ -367,7 +379,6 @@ object DebugApiRoute {
     m => Json.toJson(m.map { case (assetId, count) => assetId.base58 -> count })
   )
   implicit val leaseInfoFormat: Format[LeaseBalance] = Json.format
-  implicit val portfolioFormat: Format[Portfolio]    = Json.format
 
   case class AccountMiningInfo(address: String, miningBalance: Long, timestamp: Long)
 
@@ -381,7 +392,14 @@ object DebugApiRoute {
 
   case class HistoryInfo(lastBlockIds: Seq[BlockId], microBlockIds: Seq[BlockId])
 
-  implicit val historyInfoFormat: Format[HistoryInfo] = Json.format
+  implicit val historyInfoFormat: Format[HistoryInfo] = Format(
+    Reads { json =>
+      ???
+    },
+    Writes { info =>
+      ???
+    }
+  )
 
   implicit val hrCacheSizesFormat: Format[HistoryReplier.CacheSizes]          = Json.format
   implicit val mbsCacheSizesFormat: Format[MicroBlockSynchronizer.CacheSizes] = Json.format

@@ -1,29 +1,22 @@
 package com.wavesplatform.api.http
 
-import akka.http.scaladsl.marshalling.ToResponseMarshallable
 import akka.http.scaladsl.server.{Route, StandardRoute}
-import com.wavesplatform.network._
+import com.wavesplatform.block.BlockHeader
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.settings.RestAPISettings
-import com.wavesplatform.state.{Blockchain, ByteStr}
+import com.wavesplatform.state.Blockchain
+import com.wavesplatform.transaction._
 import io.netty.channel.group.ChannelGroup
 import io.swagger.annotations._
 import javax.ws.rs.Path
-import monix.eval.Task
 import monix.execution.Scheduler.Implicits.global
 import play.api.libs.json._
-import com.wavesplatform.block.BlockHeader
-import com.wavesplatform.transaction._
 
 import scala.concurrent._
-import scala.util.Try
 
 @Path("/blocks")
 @Api(value = "/blocks")
-case class BlocksApiRoute(settings: RestAPISettings,
-                          blockchain: Blockchain,
-                          allChannels: ChannelGroup,
-                          checkpointProc: Checkpoint => Task[Either[ValidationError, Option[BigInt]]])
-    extends ApiRoute {
+case class BlocksApiRoute(settings: RestAPISettings, blockchain: Blockchain, allChannels: ChannelGroup) extends ApiRoute {
 
   // todo: make this configurable and fix integration tests
   val MaxBlocksPerRequest = 100
@@ -31,7 +24,7 @@ case class BlocksApiRoute(settings: RestAPISettings,
 
   override lazy val route =
     pathPrefix("blocks") {
-      signature ~ first ~ last ~ lastHeaderOnly ~ at ~ atHeaderOnly ~ seq ~ seqHeaderOnly ~ height ~ heightEncoded ~ child ~ address ~ delay ~ checkpoint
+      signature ~ first ~ last ~ lastHeaderOnly ~ at ~ atHeaderOnly ~ seq ~ seqHeaderOnly ~ height ~ heightEncoded ~ child ~ address ~ delay
     }
 
   @Path("/address/{address}/{from}/{to}")
@@ -92,14 +85,12 @@ case class BlocksApiRoute(settings: RestAPISettings,
     ))
   def delay: Route = (path("delay" / Segment / IntNumber) & get) { (encodedSignature, count) =>
     withBlock(blockchain, encodedSignature) { block =>
-      val averageDelay = Try {
-        (block.timestamp - blockchain.parent(block, count).get.timestamp) / count
-      }
-
-      complete(
-        averageDelay
-          .map(d => Json.obj("delay" -> d))
-          .getOrElse[JsObject](Json.obj("status" -> "error", "details" -> "Internal error")))
+      if (count <= 0) complete(CustomValidationError("Block count should be positive"))
+      else
+        blockchain
+          .parent(block, count)
+          .map(parent => complete(Json.obj("delay" -> (block.timestamp - parent.timestamp) / count)))
+          .getOrElse(complete(CustomValidationError(s"Cannot go $count blocks back")))
     }
   }
 
@@ -238,31 +229,6 @@ case class BlocksApiRoute(settings: RestAPISettings,
         case Right(block) => complete(block.json() + ("height" -> blockchain.heightOf(block.uniqueId).map(Json.toJson(_)).getOrElse(JsNull)))
         case Left(e)      => complete(e)
       }
-    }
-  }
-
-  @Path("/checkpoint")
-  @ApiOperation(value = "Create checkpoint", notes = "Broadcast a checkpoint", httpMethod = "POST")
-  @ApiImplicitParams(
-    Array(
-      new ApiImplicitParam(name = "message",
-                           value = "Checkpoint message",
-                           required = true,
-                           paramType = "body",
-                           dataType = "com.wavesplatform.network.Checkpoint")
-    ))
-  @ApiResponses(
-    Array(
-      new ApiResponse(code = 200, message = "Json with response or error")
-    ))
-  def checkpoint: Route = (path("checkpoint") & post) {
-    json[Checkpoint] { checkpoint =>
-      checkpointProc(checkpoint)
-        .runAsync(rollbackExecutor)
-        .map {
-          _.map(score => allChannels.broadcast(LocalScoreChanged(score.getOrElse(blockchain.score))))
-        }
-        .map(_.fold(ApiError.fromValidationError, _ => Json.obj("" -> "")): ToResponseMarshallable)
     }
   }
 }

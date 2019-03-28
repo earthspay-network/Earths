@@ -12,6 +12,7 @@ case class SynchronizationSettings(maxRollback: Int,
                                    maxChainLength: Int,
                                    synchronizationTimeout: FiniteDuration,
                                    scoreTTL: FiniteDuration,
+                                   maxBaseTargetOpt: Option[Long],
                                    invalidBlocksStorage: InvalidBlockStorageSettings,
                                    microBlockSynchronizer: MicroblockSynchronizerSettings,
                                    historyReplierSettings: HistoryReplierSettings,
@@ -25,7 +26,13 @@ object SynchronizationSettings {
 
   case class HistoryReplierSettings(maxMicroBlockCacheSize: Int, maxBlockCacheSize: Int)
 
-  case class UtxSynchronizerSettings(networkTxCacheSize: Int, networkTxCacheTime: FiniteDuration, maxBufferSize: Int, maxBufferTime: FiniteDuration)
+  case class UtxSynchronizerSettings(networkTxCacheSize: Int,
+                                     networkTxCacheTime: FiniteDuration,
+                                     maxBufferSize: Int,
+                                     maxBufferTime: FiniteDuration,
+                                     parallelism: Int,
+                                     maxThreads: Int,
+                                     maxQueueSize: Int)
 
   val configPath: String = "waves.synchronization"
 
@@ -34,6 +41,7 @@ object SynchronizationSettings {
     val maxChainLength          = config.as[Int](s"$configPath.max-chain-length")
     val synchronizationTimeout  = config.as[FiniteDuration](s"$configPath.synchronization-timeout")
     val scoreTTL                = config.as[FiniteDuration](s"$configPath.score-ttl")
+    val maxBaseTargetOpt        = config.as[Option[Long]](s"$configPath.max-base-target")
     val invalidBlocksStorage    = config.as[InvalidBlockStorageSettings](s"$configPath.invalid-blocks-storage")
     val microBlockSynchronizer  = config.as[MicroblockSynchronizerSettings](s"$configPath.micro-block-synchronizer")
     val historyReplierSettings  = config.as[HistoryReplierSettings](s"$configPath.history-replier")
@@ -44,6 +52,7 @@ object SynchronizationSettings {
       maxChainLength,
       synchronizationTimeout,
       scoreTTL,
+      maxBaseTargetOpt,
       invalidBlocksStorage,
       microBlockSynchronizer,
       historyReplierSettings,

@@ -1,14 +1,15 @@
 package com.wavesplatform.it
 
+import com.wavesplatform.account.PrivateKeyAccount
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.it.api.SyncHttpApi._
 import com.wavesplatform.it.util._
-import org.scalatest._
-import org.scalatest.concurrent.{IntegrationPatience, ScalaFutures}
-import com.wavesplatform.account.PrivateKeyAccount
 import com.wavesplatform.transaction.smart.SetScriptTransaction
 import com.wavesplatform.transaction.smart.script.ScriptCompiler
-import com.wavesplatform.utils.ScorexLogging
 import com.wavesplatform.transaction.transfer._
+import com.wavesplatform.utils.ScorexLogging
+import org.scalatest._
+import org.scalatest.concurrent.{IntegrationPatience, ScalaFutures}
 
 trait IntegrationSuiteWithThreeAddresses
     extends BeforeAndAfterAll
@@ -21,9 +22,10 @@ trait IntegrationSuiteWithThreeAddresses
     with ScorexLogging {
   this: Suite =>
 
-  def notMiner: Node
+  def miner: Node    = nodes.head
+  def notMiner: Node = nodes.last
 
-  protected def sender: Node = notMiner
+  protected def sender: Node = miner
 
   protected lazy val firstAddress: String  = sender.createAddress()
   protected lazy val secondAddress: String = sender.createAddress()
@@ -38,7 +40,7 @@ trait IntegrationSuiteWithThreeAddresses
 
     def dumpBalances(node: Node, accounts: Seq[String], label: String): Unit = {
       accounts.foreach(acc => {
-        val (balance, eff) = notMiner.accountBalances(acc)
+        val (balance, eff) = miner.accountBalances(acc)
 
         val formatted = s"$acc: balance = $balance, effective = $eff"
         log.debug(s"$label account balance:\n$formatted")
@@ -56,6 +58,7 @@ trait IntegrationSuiteWithThreeAddresses
 
     def makeTransfers(accounts: Seq[String]): Seq[String] = accounts.map { acc =>
       sender.transfer(sender.address, acc, defaultBalance, sender.fee(TransferTransactionV1.typeId)).id
+
     }
 
     def correctStartBalancesFuture(): Unit = {
@@ -76,7 +79,7 @@ trait IntegrationSuiteWithThreeAddresses
       }
 
       dumpBalances(sender, accounts, "after transfer")
-      accounts.foreach(notMiner.assertBalances(_, defaultBalance, defaultBalance))
+      accounts.foreach(miner.assertBalances(_, defaultBalance, defaultBalance))
     }
 
     withClue("beforeAll") {
@@ -90,7 +93,7 @@ trait IntegrationSuiteWithThreeAddresses
       ScriptCompiler(scriptText, isAssetScript = false).explicitGet()._1
     }
     val setScriptTransaction = SetScriptTransaction
-      .selfSigned(SetScriptTransaction.supportedVersions.head, acc, script, 0.014.waves, System.currentTimeMillis())
+      .selfSigned(acc, script, 0.014.waves, System.currentTimeMillis())
       .right
       .get
     sender

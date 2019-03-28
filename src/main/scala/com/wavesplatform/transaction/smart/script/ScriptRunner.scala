@@ -1,37 +1,62 @@
 package com.wavesplatform.transaction.smart.script
 
 import cats.implicits._
-import com.wavesplatform.account.AddressScheme
-import com.wavesplatform.lang.v1.compiler.Terms.EVALUATED
-import com.wavesplatform.lang.v1.evaluator.EvaluatorV1
-import com.wavesplatform.lang.{ExecutionError, ExprEvaluator}
+import com.wavesplatform.account.{Address, AddressScheme}
+import com.wavesplatform.lang._
+import com.wavesplatform.lang.contract.DApp
+import com.wavesplatform.lang.v1.compiler.Terms.{EVALUATED, FALSE, TRUE}
+import com.wavesplatform.lang.v1.evaluator.{EvaluatorV1, _}
 import com.wavesplatform.state._
-import com.wavesplatform.transaction.Transaction
-import com.wavesplatform.transaction.assets.exchange.Order
-import com.wavesplatform.transaction.smart.BlockchainContext
+import com.wavesplatform.transaction.smart.script.v1.ExprScript
+import com.wavesplatform.transaction.smart.{BlockchainContext, RealTransactionWrapper, Verifier}
+import com.wavesplatform.transaction.{Authorized, Proven}
 import monix.eval.Coeval
-import shapeless._
 
 object ScriptRunner {
+  type TxOrd = BlockchainContext.In
 
-  def apply[A <: EVALUATED](height: Int,
-                            in: Transaction :+: Order :+: CNil,
-                            blockchain: Blockchain,
-                            script: Script,
-                            isTokenScript: Boolean): (ExprEvaluator.Log, Either[ExecutionError, A]) = {
+  def apply(height: Int,
+            in: TxOrd,
+            blockchain: Blockchain,
+            script: Script,
+            isTokenScript: Boolean,
+            dappAddress: Address): (Log, Either[ExecutionError, EVALUATED]) = {
     script match {
-      case Script.Expr(expr) =>
+      case s: ExprScript =>
         val ctx = BlockchainContext.build(
-          script.version,
+          script.stdLibVersion,
           AddressScheme.current.chainId,
           Coeval.evalOnce(in),
           Coeval.evalOnce(height),
           blockchain,
-          isTokenScript
+          isTokenScript,
+          false,
+          Coeval(dappAddress)
         )
-        EvaluatorV1.applywithLogging[A](ctx, expr)
+        EvaluatorV1.applywithLogging[EVALUATED](ctx, s.expr)
+      case ContractScript.ContractScriptImpl(_, DApp(_, _, Some(vf)), _) =>
+        val ctx = BlockchainContext.build(
+          script.stdLibVersion,
+          AddressScheme.current.chainId,
+          Coeval.evalOnce(in),
+          Coeval.evalOnce(height),
+          blockchain,
+          isTokenScript,
+          true,
+          Coeval(dappAddress)
+        )
+        val evalContract = in.eliminate(t => ContractEvaluator.verify(vf, RealTransactionWrapper.apply(t)),
+                                        _.eliminate(t => ContractEvaluator.verify(vf, RealTransactionWrapper.ord(t)), _ => ???))
+        EvaluatorV1.evalWithLogging(ctx, evalContract)
 
-      case _ => (List.empty, "Unsupported script version".asLeft[A])
+      case ContractScript.ContractScriptImpl(_, DApp(_, _, None), _) =>
+        val t: Proven with Authorized =
+          in.eliminate(_.asInstanceOf[Proven with Authorized], _.eliminate(_.asInstanceOf[Proven with Authorized], _ => ???))
+        (List.empty, Verifier.verifyAsEllipticCurveSignature[Proven with Authorized](t) match {
+          case Right(_) => Right(TRUE)
+          case Left(_)  => Right(FALSE)
+        })
+      case _ => (List.empty, "Unsupported script version".asLeft[EVALUATED])
     }
   }
 }
