@@ -7,7 +7,7 @@ func fearmissing() = {
    let payment = match i.payment {
 	   case p:AttachedPayment =>
 	   		match p.asset {
-				   case asset: ByteVector => throw("fomo waves only")
+				   case asset: ByteVector => throw("fomo earths only")
 				   case _ => p.amount
 			   }
 
@@ -40,6 +40,6 @@ func withdraw(amount: Int) = {
 	let canWithdraw = heightCorrect && callerCorrect
 
 	if (canWithdraw)
-		then TransferSet(List(ContractTransfer(i.caller, wavesBalance(i.contractAddress), unit)))
+		then TransferSet(List(ContractTransfer(i.caller, earthsBalance(i.contractAddress), unit)))
 		else throw("behold")
 }

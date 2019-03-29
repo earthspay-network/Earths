@@ -1,17 +1,17 @@
 import cats.kernel.Monoid
-import com.wavesplatform.lang.StdLibVersion.{StdLibVersion, _}
-import com.wavesplatform.lang.contract.Contract
-import com.wavesplatform.lang.directives.DirectiveParser
-import com.wavesplatform.lang.utils.{extractScriptType, extractStdLibVersion}
-import com.wavesplatform.lang.v1.CTX
-import com.wavesplatform.lang.v1.FunctionHeader.{Native, User}
-import com.wavesplatform.lang.v1.compiler.Terms._
-import com.wavesplatform.lang.v1.compiler.Types._
-import com.wavesplatform.lang.v1.evaluator.ctx.impl.waves.WavesContext
-import com.wavesplatform.lang.v1.evaluator.ctx.impl.{CryptoContext, PureContext}
-import com.wavesplatform.lang.v1.traits.domain.{Recipient, Tx}
-import com.wavesplatform.lang.v1.traits.{DataType, Environment}
-import com.wavesplatform.lang.{Global, ScriptType}
+import com.earthspay.lang.StdLibVersion.{StdLibVersion, _}
+import com.earthspay.lang.contract.Contract
+import com.earthspay.lang.directives.DirectiveParser
+import com.earthspay.lang.utils.{extractScriptType, extractStdLibVersion}
+import com.earthspay.lang.v1.CTX
+import com.earthspay.lang.v1.FunctionHeader.{Native, User}
+import com.earthspay.lang.v1.compiler.Terms._
+import com.earthspay.lang.v1.compiler.Types._
+import com.earthspay.lang.v1.evaluator.ctx.impl.earths.EarthsContext
+import com.earthspay.lang.v1.evaluator.ctx.impl.{CryptoContext, PureContext}
+import com.earthspay.lang.v1.traits.domain.{Recipient, Tx}
+import com.earthspay.lang.v1.traits.{DataType, Environment}
+import com.earthspay.lang.{Global, ScriptType}
 
 import scala.scalajs.js
 import scala.scalajs.js.Dynamic.{literal => jObj}
@@ -48,7 +48,7 @@ object JsAPI {
     toJs(TRUE) // later
   }
 
-  private def wavesContext(v: com.wavesplatform.lang.StdLibVersion.StdLibVersion, isTokenContext: Boolean = false) = WavesContext.build(
+  private def earthsContext(v: com.earthspay.lang.StdLibVersion.StdLibVersion, isTokenContext: Boolean = false) = EarthsContext.build(
     v,
     new Environment {
       override def height: Long                                                                                    = 0
@@ -77,11 +77,11 @@ object JsAPI {
     buildContractContext(V3)
 
   private def buildScriptContext(v: StdLibVersion, isTokenContext: Boolean): CTX = {
-    Monoid.combineAll(Seq(PureContext.build(v), cryptoContext, wavesContext(v, isTokenContext)))
+    Monoid.combineAll(Seq(PureContext.build(v), cryptoContext, earthsContext(v, isTokenContext)))
   }
 
   private def buildContractContext(v: StdLibVersion): CTX = {
-    Monoid.combineAll(Seq(PureContext.build(v), cryptoContext, wavesContext(V3)))
+    Monoid.combineAll(Seq(PureContext.build(v), cryptoContext, earthsContext(V3)))
   }
 
   @JSExportTopLevel("fullContext")
