@@ -11,5 +11,5 @@ object Constants extends ScorexLogging {
   val AgentName       = s"Earths v${Version.VersionString}"
 
   val UnitsInEarth = 100000000L
-  val TotalEarths  = 9223300000000000000L
+  val TotalEarths  = 92233000000L
 }
